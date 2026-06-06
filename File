@@ -548,7 +548,9 @@ local function KillEnemy(Enemy)
             end
         elseif Character and Character:FindFirstChildWhichIsA("Humanoid") and Character:FindFirstChildWhichIsA("Humanoid").Health <= 0 then
             pcall(function() if FocusCam then FocusCam:Destroy() end end)
-            return
+            player.CharacterAdded:Wait()
+            task.wait(0.5)
+            continue
         end
 
         task.wait()
@@ -4737,30 +4739,64 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                     
                     if questData and questData.Enemy then
                         local enemyName = questData.Enemy
-                        local living = workspace:FindFirstChild("Living")
+                    local living = workspace:FindFirstChild("Living")
+                    
+                    if living then
+                        local foundAny = false
+                        local maxScan = 50
+                        local scanCount = 0
                         
-                        if living then
-                            local foundAny = false
-                            local maxScan = 50
-                            local scanCount = 0
+                        for _, v in pairs(living:GetChildren()) do
+                            if not getgenv().QuestFarmEnabled then break end
+                            if not IsPlayerReady() then break end
+                            if getgenv().CompletedQuest then break end
+                            if scanCount >= maxScan then break end
                             
-                            for _, v in pairs(living:GetChildren()) do
-                                if not getgenv().QuestFarmEnabled then break end
-                                if not IsPlayerReady() then break end
-                                if getgenv().CompletedQuest then break end
-                                if scanCount >= maxScan then break end
-                                
-                                if v.Name == enemyName and v:FindFirstChild("HumanoidRootPart") and v:FindFirstChild("Health") and v.Health.Value > 0 then
-                                    foundAny = true
-                                    pcall(function() KillEnemy(v) end)
-                                end
-                                scanCount = scanCount + 1
+                            if v.Name == enemyName and v:FindFirstChild("HumanoidRootPart") and v:FindFirstChild("Health") and v.Health.Value > 0 then
+                                foundAny = true
+                                pcall(function() KillEnemy(v) end)
                             end
-                            
-                            if foundAny then
-                                task.wait(0.05)
+                            scanCount = scanCount + 1
+                        end
+                        
+                        if foundAny then
+                            task.wait(0.05)
+                        else
+                            -- No enemy found, wait for respawn but handle death during wait
+                            local waitStart = tick()
+                            while getgenv().QuestFarmEnabled and not getgenv().CompletedQuest do
+                                if not IsPlayerReady() then
+                                    disableNoclip()
+                                    repeat task.wait(0.5) until IsPlayerReady() or not getgenv().QuestFarmEnabled
+                                    if not getgenv().QuestFarmEnabled then break end
+                                    task.wait(2)
+                                    enableNoclip()
+                                    if getgenv().QuestMethod == "With Stand" and IsPlayerReady() then
+                                        EquipStand()
+                                    end
+                                    -- After respawn, re-scan immediately
+                                    break
+                                end
+                                
+                                -- Check if enemy spawned
+                                local enemySpawned = false
+                                for _, v in pairs(living:GetChildren()) do
+                                    if v.Name == enemyName and v:FindFirstChild("HumanoidRootPart") and v:FindFirstChild("Health") and v.Health.Value > 0 then
+                                        enemySpawned = true
+                                        break
+                                    end
+                                end
+                                if enemySpawned then break end
+                                
+                                task.wait(0.5)
+                                
+                                -- Timeout after 30 seconds of waiting to prevent infinite stuck
+                                if tick() - waitStart > 30 then
+                                    break
+                                end
                             end
                         end
+                    end
                     elseif questData and questData.Item then
                         local itemName = questData.Item
                         local requiredAmount = questData.Amount or 1
