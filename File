@@ -1,8 +1,8 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ErasedDiavolo/Test/refs/heads/main/haf"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ErasedDiavolo/Test/refs/heads/main/badr"))()
 
 local Window = Library:NaJa({
-    Title = "YBA Script",
-    Desc = "by Methion | V1.6.66",
+    Title = "Truly Yours Yba",
+    Desc = "By Truly Yours",
     Bind = Enum.KeyCode.K,
     Discord = "https://discord.gg/vCKZFjaTv4"
 })
@@ -1081,6 +1081,53 @@ local function isItemTarget(target)
     return false
 end
 
+local function collectItemHidden(itemPrompt, parentModel)
+    local char = player.Character
+    if not char then return false end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+
+    local targetCFrame = parentModel:GetModelCFrame() - Vector3.new(0, 9, 0)
+    
+    hrp.CFrame = targetCFrame
+    
+    -- Check if farming is still enabled (use whichever flag is active)
+    local farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
+    
+    repeat
+        task.wait()
+        hrp.CFrame = targetCFrame
+        farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
+    until (hrp.Position - parentModel:GetModelCFrame().p).Magnitude <= 40
+        or not farmEnabled
+        or not parentModel.Parent
+
+    farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
+    if not farmEnabled then return false end
+    if not parentModel.Parent then return false end
+
+    -- Simple delay instead of ping-based (your script doesn't have getPing/itemFarmTiming)
+    task.wait(0.5)
+
+    farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
+    if not farmEnabled then return false end
+
+    repeat
+        pcall(function()
+            if itemPrompt and itemPrompt:FindFirstChild("RemoteEvent") then
+                itemPrompt.RemoteEvent:FireServer()
+            elseif itemPrompt then
+                fireproximityprompt(itemPrompt, 0, true)
+            end
+        end)
+        task.wait(0.1)
+        farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
+    until not farmEnabled
+        or not (parentModel:FindFirstChild("ProximityPrompt"))
+
+    return true
+end
+
 local function travelToInstant(target)
     cleanupItemStick()
 
@@ -1135,18 +1182,24 @@ local function travelToInstant(target)
         hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 
     elseif method == "Down" then
-        local STICK_DISTANCE = 8
-
+        -- Stick to item 9 studs below + fire prompt
+        local itemPrompt = nil
+        if targetPart.Parent then
+            itemPrompt = targetPart.Parent:FindFirstChild("ProximityPrompt")
+        end
+        if not itemPrompt and targetPart:FindFirstChild("ProximityPrompt") then
+            itemPrompt = targetPart:FindFirstChild("ProximityPrompt")
+        end
+        
+        local STICK_DISTANCE = 9
         local attA = Instance.new("Attachment")
         attA.Name = "ItemStick_AttA"
         attA.Parent = hrp
         attA.WorldOrientation = Vector3.new(0, 0, 0)
-
         local attB = Instance.new("Attachment")
         attB.Name = "ItemStick_AttB"
         attB.Parent = targetPart
         attB.Position = Vector3.new(0, 0, 0)
-
         local alignPos = Instance.new("AlignPosition")
         alignPos.Name = "ItemStick_AlignPos"
         alignPos.Attachment0 = attA
@@ -1156,7 +1209,6 @@ local function travelToInstant(target)
         alignPos.RigidityEnabled = false
         alignPos.Mode = Enum.PositionAlignmentMode.TwoAttachment
         alignPos.Parent = hrp
-
         local stickData = {
             alignPos = alignPos,
             attA = attA,
@@ -1165,29 +1217,43 @@ local function travelToInstant(target)
             isTempPart = false
         }
         table.insert(getgenv().ItemStickConnections, stickData)
-
         local worldPos = targetPart.Position - Vector3.new(0, STICK_DISTANCE, 0)
         hrp.CFrame = CFrame.new(worldPos) * CFrame.Angles(0, hrp.CFrame.Y, 0)
-
         local stickConn = game:GetService("RunService").Heartbeat:Connect(function()
             if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
                 cleanupItemStick()
                 return
             end
-
             hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-
             attA.WorldOrientation = Vector3.new(0, hrp.Orientation.Y, 0)
-
             if targetPart and targetPart.Parent then
                 attB.WorldPosition = targetPart.Position - Vector3.new(0, STICK_DISTANCE, 0)
             else
                 cleanupItemStick()
             end
         end)
-
         stickData.conn = stickConn
+        
+        -- Fire the prompt repeatedly while stuck
+        if itemPrompt then
+            task.spawn(function()
+                local farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
+                local startTime = tick()
+                while farmEnabled and targetPart and targetPart.Parent do
+                    pcall(function()
+                        if itemPrompt:FindFirstChild("RemoteEvent") then
+                            itemPrompt.RemoteEvent:FireServer()
+                        else
+                            fireproximityprompt(itemPrompt, 0, true)
+                        end
+                    end)
+                    task.wait(0.1)
+                    farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
+                    if tick() - startTime > 5 then break end
+                end
+            end)
+        end
     end
 end
 
@@ -1968,111 +2034,100 @@ local function enableItemNotifier()
                 HoverStrokeColor = Color3.fromRGB(65, 220, 115),
                 TextColor = Color3.fromRGB(255, 255, 255),
                 AutoDismiss = false,
-                Callback = function()
-                    if normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn then
-                        Window:Notify("Pickup", "Item Farm is running! Disable farming first.", 3)
-                        return
-                    end
-                    if standFarmEnabled or standFarmBusy then
-                        Window:Notify("Pickup", "Stand Farm is running! Disable it first.", 3)
-                        return
-                    end
-                    if ribFarmRunning then
-                        Window:Notify("Pickup", "Rib Farm is running! Disable it first.", 3)
-                        return
-                    end
-                    if autoPrestigeEnabled or autoPrestigeBusy then
-                        Window:Notify("Pickup", "Auto Storyline/Prestige is running! Disable it first.", 3)
-                        return
-                    end
-                    if getgenv().QuestFarmEnabled or getgenv().NPCFarmEnabled then
-                        Window:Notify("Pickup", "Quest Farm is running! Disable it first.", 3)
-                        return
-                    end
+            Callback = function()
+                if normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn then
+                    Window:Notify("Pickup", "Item Farm is running! Disable farming first.", 3)
+                    return
+                end
+                if standFarmEnabled or standFarmBusy then
+                    Window:Notify("Pickup", "Stand Farm is running! Disable it first.", 3)
+                    return
+                end
+                if ribFarmRunning then
+                    Window:Notify("Pickup", "Rib Farm is running! Disable it first.", 3)
+                    return
+                end
+                if autoPrestigeEnabled or autoPrestigeBusy then
+                    Window:Notify("Pickup", "Auto Storyline/Prestige is running! Disable it first.", 3)
+                    return
+                end
+                if getgenv().QuestFarmEnabled or getgenv().NPCFarmEnabled then
+                    Window:Notify("Pickup", "Quest Farm is running! Disable it first.", 3)
+                    return
+                end
 
-                    if not itemPart or not itemPart.Parent then
-                        Window:Notify("Pickup", "Item no longer exists!", 3)
-                        return
-                    end
-                    
-                    local currentHRP = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                    local returnPos = nil
-                    if currentHRP then
-                        returnPos = currentHRP.CFrame
-                    end
-                    
-                    local executorSupportsInstant = getgenv().MethionBypassLoaded == true
-                    
-                    if executorSupportsInstant then
-                        local originalMethod = getgenv().InstantMethod
-                        getgenv().InstantMethod = "Down"
-                        
-                        enableNoclip()
-                        
-                        travelToInstant(itemPart)
-                        
-                        wait(0.3)
-                        local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                        for i = 1, 5 do
-                            if not itemPart or not itemPart.Parent then break end
-                            if hrp and (itemPart.Position - hrp.Position).Magnitude < 12 then
-                                pcall(function()
-                                    fireproximityprompt(prox, 0, true)
-                                end)
-                            end
-                            wait(0.1)
-                        end
-                        
-                        wait(0.5)
-                        
-                        cleanupItemStick()
-                        
-                        getgenv().InstantMethod = originalMethod
-                        
-                        if returnPos then
-                            wait(0.2)
-                            local hrp2 = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                            if hrp2 then
-                                hrp2.CFrame = returnPos
-                                hrp2.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                                hrp2.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-                            end
-                        end
-                        
-                        disableNoclip()
-                        Window:Notify("Pickup", "Picked up " .. itemName .. " using Instant method!", 3)
-                    else
-                        local originalMethod = getgenv().InstantMethod
-                        getgenv().InstantMethod = "Up"
-                        
-                        enableNoclip()
-                        
-                        travelToTween(itemPart, function()
-                            return itemPart and itemPart.Parent
-                        end)
-                        
-                        wait(0.3)
-                        local hrp2 = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                        if hrp2 and itemPart and itemPart.Parent then
-                            local dist = (itemPart.Position - hrp2.Position).Magnitude
-                            if dist < 10 then
-                                pcall(function()
-                                    fireproximityprompt(prox, 4)
-                                end)
-                            end
-                        end
-                        
-                        if returnPos then
-                            wait(0.5)
-                            travelToTween(returnPos.Position, function()
-                                return true
-                            end)
-                        end
-                        
-                        disableNoclip()
-                        Window:Notify("Pickup", "Picked up " .. itemName .. " using Tween method!", 3)
+                if not itemPart or not itemPart.Parent then
+                    Window:Notify("Pickup", "Item no longer exists!", 3)
+                    return
+                end
+
+                local currentHRP = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                local returnPos = nil
+                if currentHRP then
+                    returnPos = currentHRP.CFrame
+                end
+
+                local parentModel = itemPart.Parent
+                local prompt = parentModel and parentModel:FindFirstChild("ProximityPrompt")
+
+                if not prompt then
+                    Window:Notify("Pickup", "Item prompt not found!", 3)
+                    return
+                end
+
+                -- Save original method and set to Down
+                local originalMethod = getgenv().InstantMethod
+                getgenv().InstantMethod = "Down"
+                enableNoclip()
+
+                -- Teleport to item using Down method (sticks below item)
+                pcall(function()
+                    travelToInstant(itemPart)
+                end)
+
+                -- WAIT for stick to settle before picking up
+                task.wait(0.5)
+
+                -- Fire the proximity prompt
+                pcall(function()
+                    fireproximityprompt(prompt, 1)
+                end)
+
+                -- Keep firing RemoteEvent until item is gone or timeout
+                local startTime = tick()
+                repeat
+                    pcall(function()
+                        prompt.RemoteEvent:FireServer()
+                    end)
+                    task.wait()
+                until not (parentModel:FindFirstChild("ProximityPrompt") and itemPart and itemPart.Parent)
+                    or tick() - startTime > 5
+
+                local collected = not parentModel:FindFirstChild("ProximityPrompt")
+
+                -- Cleanup: remove stick attachments and restore method
+                cleanupItemStick()
+                getgenv().InstantMethod = originalMethod or "Up"
+
+                -- Return to original position
+                if returnPos then
+                    task.wait(0.2)
+                    local hrp2 = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                    if hrp2 then
+                        hrp2.CFrame = returnPos
+                        hrp2.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        hrp2.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
                     end
                 end
+
+                disableNoclip()
+
+                if collected then
+                    Window:Notify("Pickup", "Successfully picked up " .. itemName .. "!", 3)
+                else
+                    Window:Notify("Pickup", "Timed out trying to pick up " .. itemName, 3)
+                end
+            end
             }
             
             Window:Notify("Item Spawned", itemName .. " has spawned!", 5, nil, buttonConfig)
@@ -2086,6 +2141,115 @@ local function disableItemNotifier()
         notifierConnection = nil
     end
 end
+
+-- // SPECTATE PLAYER SYSTEM
+local spectateEnabled = false
+local selectedSpectatePlayer = nil
+local spectateTween = nil
+local spectateCharConn = nil
+local spectateConnection = nil
+
+local function getSpectatePlayerNames()
+    local names = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            table.insert(names, p.Name)
+        end
+    end
+    if #names == 0 then
+        table.insert(names, "No players")
+    end
+    return names
+end
+
+local function spectateTarget(targetPlayer)
+    if not targetPlayer then return end
+    local char = targetPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildWhichIsA("Humanoid")
+    if not hrp or not humanoid or humanoid.Health <= 0 then return end
+
+    -- Clean up old camera hooks if any
+    if spectateTween then
+        pcall(function() spectateTween:Cancel() end)
+        spectateTween = nil
+    end
+    if spectateConnection then
+        pcall(function() spectateConnection:Disconnect() end)
+        spectateConnection = nil
+    end
+
+    -- Use FocusCam just like quest farming does
+    local localChar = player.Character
+    if not localChar then return end
+    local localHum = localChar:FindFirstChildWhichIsA("Humanoid")
+    if not localHum then return end
+
+    local FocusCam = localChar:FindFirstChild("FocusCam")
+    if not FocusCam then
+        FocusCam = Instance.new("ObjectValue", localChar)
+        FocusCam.Name = "FocusCam"
+    end
+    FocusCam.Value = hrp
+
+    -- Keep camera on local humanoid so the game handles it naturally
+    local camera = workspace.CurrentCamera
+    camera.CameraSubject = localHum
+    camera.CameraType = Enum.CameraType.Custom
+end
+
+local function stopSpectating()
+    spectateEnabled = false
+    if spectateTween then
+        pcall(function() spectateTween:Cancel() end)
+        spectateTween = nil
+    end
+    if spectateCharConn then
+        pcall(function() spectateCharConn:Disconnect() end)
+        spectateCharConn = nil
+    end
+    if spectateConnection then
+        pcall(function() spectateConnection:Disconnect() end)
+        spectateConnection = nil
+    end
+
+    -- Remove FocusCam and reset camera like quest farming does
+    pcall(function()
+        local localChar = player.Character
+        if localChar and localChar:FindFirstChild("FocusCam") then
+            localChar.FocusCam:Destroy()
+        end
+        local localHum = localChar and localChar:FindFirstChildWhichIsA("Humanoid")
+        if localHum then
+            workspace.CurrentCamera.CameraSubject = localHum
+            workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+        end
+    end)
+end
+
+local function trackSpectateCharacter(targetPlayer)
+    if spectateCharConn then
+        pcall(function() spectateCharConn:Disconnect() end)
+        spectateCharConn = nil
+    end
+    if not targetPlayer then return end
+    -- When target respawns, update FocusCam to new HRP
+    spectateCharConn = targetPlayer.CharacterAdded:Connect(function()
+        if spectateEnabled and selectedSpectatePlayer == targetPlayer then
+            task.wait(0.5)
+            spectateTarget(targetPlayer)
+        end
+    end)
+end
+
+-- Handle local player respawn while spectating
+player.CharacterAdded:Connect(function(char)
+    if spectateEnabled and selectedSpectatePlayer then
+        task.wait(0.5)
+        spectateTarget(selectedSpectatePlayer)
+    end
+end)
 
 local instantPickup = false
 local instantPickupConnection = nil
@@ -4090,6 +4254,7 @@ SellingTab = Window:Tab("Selling", "dollar-sign")
 VisualTab = Window:Tab("Visual", "eye")
 AdjustTab = Window:Tab("Adjust", "sliders-horizontal")
 UtilityTab = Window:Tab("Utility", "shield")
+NpcPlaceTab = Window:Tab("Npc & Place", "map-pin")
 QuestTab = Window:Tab("Quest", "list")
 StandFarmTab = Window:Tab("Stand Farm", "sword")
 StorylineTab = Window:Tab("Storyline", "scroll")
@@ -4385,6 +4550,7 @@ SellRight:Button("Sell Inventory", function()
 end)
 
 VisualLeft = VisualTab:Section("ESP & Notifier", "Left", "eye")
+VisualRight = VisualTab:Section("Spectate Player", "Right", "video")
 
 VisualLeft:Toggle("Item ESP", true, function(state)
     itemESP = state
@@ -4407,6 +4573,219 @@ VisualLeft:Toggle("Item Spawn Notifier", true, function(state)
         disableItemNotifier()
     end
 end)
+
+-- // Spectate Player UI
+VisualRight:Paragraph("Search and select a player to spectate. Camera will smoothly tween to the target.", Color3.fromRGB(140, 140, 140))
+
+local spectatePlayerList = getSpectatePlayerNames()
+local spectateDropdown = nil
+local spectateSearchText = ""
+
+VisualRight:InputSmall("Search Player", "Type name...", function(value)
+    spectateSearchText = value or ""
+    if spectateSearchText == "" then return end
+    for _, name in ipairs(spectatePlayerList) do
+        if name:lower():find(spectateSearchText:lower(), 1, true) then
+            if spectateDropdown and spectateDropdown.Set then
+                pcall(function() spectateDropdown:Set(name) end)
+            end
+            local newTarget = Players:FindFirstChild(name)
+            if newTarget then
+                selectedSpectatePlayer = newTarget
+                trackSpectateCharacter(newTarget)
+                if spectateEnabled then
+                    spectateTarget(newTarget)
+                    Window:Notify("Spectate", "Now spectating: " .. name, 3)
+                end
+            end
+            break
+        end
+    end
+end)
+
+spectateDropdown = VisualRight:Dropdown("Select Player", spectatePlayerList, spectatePlayerList[1] or "No players", function(selected)
+    if selected == "No players" then
+        selectedSpectatePlayer = nil
+        return
+    end
+    local newTarget = Players:FindFirstChild(selected)
+    if newTarget then
+        selectedSpectatePlayer = newTarget
+        trackSpectateCharacter(newTarget)
+        if spectateEnabled then
+            spectateTarget(newTarget)
+            Window:Notify("Spectate", "Now spectating: " .. selected, 3)
+        end
+    end
+end)
+
+VisualRight:Toggle("Spectate Player", false, function(state)
+    spectateEnabled = state
+    if state then
+        if selectedSpectatePlayer and selectedSpectatePlayer.Character then
+            trackSpectateCharacter(selectedSpectatePlayer)
+            spectateTarget(selectedSpectatePlayer)
+            Window:Notify("Spectate", "Spectating enabled for " .. selectedSpectatePlayer.Name, 3)
+        else
+            Window:Notify("Spectate", "No valid player selected! Please select a player first.", 3)
+        end
+    else
+        stopSpectating()
+        Window:Notify("Spectate", "Spectate disabled.", 3)
+    end
+end)
+
+VisualRight:Button("Goto Player", function()
+    if not selectedSpectatePlayer then
+        Window:Notify("Goto", "No player selected! Please select a player first.", 3)
+        return
+    end
+    
+    local targetChar = selectedSpectatePlayer.Character
+    local targetHRP = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+    if not targetHRP then
+        Window:Notify("Goto", "Target player character not loaded!", 3)
+        return
+    end
+    
+    local localChar = player.Character
+    local localHRP = localChar and localChar:FindFirstChild("HumanoidRootPart")
+    if not localHRP then
+        Window:Notify("Goto", "Your character is not loaded!", 3)
+        return
+    end
+    
+    if getgenv().MethionBypassLoaded then
+        -- Instant teleport (bypass supported)
+        local targetPos = targetHRP.Position + Vector3.new(0, 3, 0)
+        local targetCFrame = CFrame.new(targetPos) * CFrame.Angles(0, math.atan2(
+            targetPos.X - localHRP.Position.X,
+            targetPos.Z - localHRP.Position.Z
+        ), 0)
+        
+        local originalMethod = getgenv().InstantMethod
+        getgenv().InstantMethod = "Up"
+        travelToInstant(targetCFrame)
+        getgenv().InstantMethod = originalMethod or "Up"
+        
+        Window:Notify("Goto", "Teleported to " .. selectedSpectatePlayer.Name .. " (Instant)", 3)
+    else
+        -- Tween teleport (no bypass)
+        local targetPos = targetHRP.Position + Vector3.new(0, 3, 0)
+        travelToTween(targetPos, function() return true end)
+        Window:Notify("Goto", "Teleported to " .. selectedSpectatePlayer.Name .. " (Tween)", 3)
+    end
+end)
+
+-- Dynamic player list updates
+Players.PlayerAdded:Connect(function(p)
+    if p == player then return end
+    task.wait(1)
+    spectatePlayerList = getSpectatePlayerNames()
+    if spectateDropdown and spectateDropdown.Add then
+        pcall(function() spectateDropdown:Add(p.Name) end)
+    end
+end)
+
+Players.PlayerRemoving:Connect(function(p)
+    if p == selectedSpectatePlayer and spectateEnabled then
+        stopSpectating()
+        Window:Notify("Spectate", "Target player left. Spectate stopped.", 3)
+    end
+    task.wait(0.5)
+    spectatePlayerList = getSpectatePlayerNames()
+end)
+
+do
+    local N = {s = {}, d = nil, p = {}}
+    N.l = NpcPlaceTab:Section("Npc", "Left", "user")
+    N.r = NpcPlaceTab:Section("Place", "Right", "map-pin")
+
+    N.f = function()
+        N.s = {}
+        local e = {}
+        local c = workspace:FindFirstChild("Dialogues")
+        if c then
+            for _,v in pairs(c:GetChildren()) do
+                if v:FindFirstChild("Dialogue") and v:FindFirstChild("ProximityPrompt") and not e[v.Name] then
+                    e[v.Name] = true
+                    table.insert(N.s, v.Name)
+                end
+            end
+        end
+        table.sort(N.s)
+        if #N.s == 0 then table.insert(N.s, "No NPCs") end
+        return N.s
+    end
+
+    N.o = N.f()
+
+    N.m = N.l:Dropdown("NPC", N.o, N.o[1], function(x)
+        N.d = (x ~= "No NPCs") and x or nil
+    end, true)
+
+    N.g = function()
+        if not N.d or N.d == "No NPCs" then
+            Window:Notify("Npc", "Select an NPC first!", 3)
+            return
+        end
+        local c = workspace:FindFirstChild("Dialogues")
+        if not c then return end
+        local n = c:FindFirstChild(N.d)
+        if not n then return end
+        local p = n:FindFirstChildWhichIsA("BasePart") or n:FindFirstChildWhichIsA("MeshPart") or n.PrimaryPart
+        if not p then return end
+        local h = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not h then return end
+        local t = p.Position + Vector3.new(0, 3, 0)
+        if getgenv().MethionBypassLoaded then
+            local o = getgenv().InstantMethod
+            getgenv().InstantMethod = "Up"
+            travelToInstant(CFrame.new(t))
+            getgenv().InstantMethod = o or "Up"
+            Window:Notify("Npc", "Goto " .. N.d .. " (Instant)", 3)
+        else
+            travelToTween(t, function() return true end)
+            Window:Notify("Npc", "Goto " .. N.d .. " (Tween)", 3)
+        end
+    end
+
+    N.l:Button("Goto", N.g)
+
+    N.r:Paragraph("Place", Color3.fromRGB(140, 140, 140))
+    N.r:InputSmall("Name", "place name", function(v) N.p.n = v end)
+    N.r:InputSmall("Coords", "X, Y, Z", function(v)
+        local x,y,z = v:match("([-%d%.]+)%s*,%s*([-%d%.]+)%s*,%s*([-%d%.]+)")
+        if x then
+            N.p.c = Vector3.new(tonumber(x), tonumber(y), tonumber(z))
+            Window:Notify("Place", "Set!", 3)
+        end
+    end)
+    N.r:Button("Save Pos", function()
+        local h = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not h then return end
+        N.p.c = h.Position
+        Window:Notify("Place", string.format("%.1f, %.1f, %.1f", h.Position.X, h.Position.Y, h.Position.Z), 3)
+    end)
+    N.r:Button("Goto Place", function()
+        if not N.p.c then
+            Window:Notify("Place", "No coords set!", 3)
+            return
+        end
+        local h = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if not h then return end
+        if getgenv().MethionBypassLoaded then
+            local o = getgenv().InstantMethod
+            getgenv().InstantMethod = "Up"
+            travelToInstant(CFrame.new(N.p.c))
+            getgenv().InstantMethod = o or "Up"
+            Window:Notify("Place", "Goto (Instant)", 3)
+        else
+            travelToTween(N.p.c, function() return true end)
+            Window:Notify("Place", "Goto (Tween)", 3)
+        end
+    end)
+end
 
 AdjustLeft = AdjustTab:Section("Speed & Delay", "Left", "zap")
 AdjustRight = AdjustTab:Section("Methods & Position", "Right", "map-pin")
@@ -4954,11 +5333,8 @@ end)
 QuestLeft:Paragraph("Info", Color3.fromRGB(140, 140, 140))
 
 QuestLeft:Button("Show Stats", function()
-    Window:Notify("Stats", "Stand: " .. PlayerStand.Value
-        .. " | Lvl: " .. PlayerLevel.Value
-        .. " | Pity: " .. roundTwo(getPity())
-        .. " | $" .. PlayerMoney.Value
-        .. " | Spec: " .. PlayerSpec.Value, 5)
+    local statsText = "{Stand} " .. PlayerStand.Value .. " | {Level} " .. PlayerLevel.Value .. " | {Pity} " .. roundTwo(getPity()) .. " | {Money} $" .. PlayerMoney.Value .. " | {Spec} " .. PlayerSpec.Value
+    Window:Notify("Stats", statsText, 10)
 end)
 
 QuestLeft:Button("Show Active Quests", function()
@@ -5117,28 +5493,86 @@ SettingsRight:Button("Destroy Window", function()
 end)
 
 if getgenv().MethionBypassLoaded then
-    local oldMagnitude = hookmetamethod(Vector3.new(), "__index", newcclosure(function(self, index)
-        local CallingScript = tostring(getcallingscript())
-        if not checkcaller() and index == "magnitude" and CallingScript == "ItemSpawn" then
-            return 0
-        end
-        return oldMagnitude(self, index)
-    end))
+    if getgenv().MethionBypassInjected then
+        Window:Notify("Bypass", "Bypass already injected!", 3)
+        return
+    end
+    getgenv().MethionBypassInjected = true
 
-    local UzuKeeIsRetardedAndDoesntKnowHowToMakeAnAntiCheatOnTheServerSideAlsoVexStfuIKnowTheCodeIsBadYouDontNeedToTellMe = "  ___XP DE KEY"
-    local oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
-        local Method = getnamecallmethod()
-        local Args = {...}
-        if not checkcaller() and rawequal(self.Name, "Returner") and rawequal(Args[1], "idklolbrah2de") then
-            return UzuKeeIsRetardedAndDoesntKnowHowToMakeAnAntiCheatOnTheServerSideAlsoVexStfuIKnowTheCodeIsBadYouDontNeedToTellMe
-        end
-        return oldNc(self, ...)
-    end))
+    (function()
+        local oldMagnitude = hookmetamethod(Vector3.new(), "__index", newcclosure(function(self, index)
+            local CallingScript = tostring(getcallingscript())
+            if not checkcaller() and index == "magnitude" and CallingScript == "ItemSpawn" then
+                return 0
+            end
+            return oldMagnitude(self, index)
+        end))
 
-    getgenv().oldMagnitude = oldMagnitude
-    getgenv().oldNc = oldNc
+        local UzuKeeIsRetardedAndDoesntKnowHowToMakeAnAntiCheatOnTheServerSideAlsoVexStfuIKnowTheCodeIsBadYouDontNeedToTellMe = "  ___XP DE KEY"
+        local oldNc = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+            local Method = getnamecallmethod()
+            local Args = {...}
+            if not checkcaller() and rawequal(self.Name, "Returner") and rawequal(Args[1], "idklolbrah2de") then
+                return UzuKeeIsRetardedAndDoesntKnowHowToMakeAnAntiCheatOnTheServerSideAlsoVexStfuIKnowTheCodeIsBadYouDontNeedToTellMe
+            end
+            return oldNc(self, ...)
+        end))
+
+        getgenv().oldMagnitude = oldMagnitude
+        getgenv().oldNc = oldNc
+    end)()
 
     Window:Notify("Bypasses loaded successfully.", "Executor supported", 3)
 else
     Window:Notify("Executor not supported", "Instant/Safe Place features hidden", 3)
+end
+
+do
+    local T = {
+        Sound = Instance.new("Sound"),
+        Count = 0,
+        Max = 2,
+        Current = nil,
+    }
+    T.Sound.SoundId = "rbxassetid://8679659744"
+    T.Sound.Volume = 1
+    T.Sound.Parent = game:GetService("SoundService")
+
+    task.spawn(function()
+        while T.Count < T.Max do
+            task.wait(math.random(45, 180))
+            if math.random(1, 2) == 1 then
+                T.Count = T.Count + 1
+                T.Current = T.Sound:Clone()
+                T.Current.Parent = game:GetService("SoundService")
+                pcall(function() T.Current:Play() end)
+
+                Window:Notify(
+                    "By Developer",
+                    "if this pops up that means i love you",
+                    60,                                      
+                    nil,                                     
+                    {                                            
+                        Text = "Dismiss",
+                        Color = Color3.fromRGB(255, 80, 80),
+                        HoverColor = Color3.fromRGB(255, 120, 120),
+                        StrokeColor = Color3.fromRGB(255, 100, 100),
+                        HoverStrokeColor = Color3.fromRGB(255, 140, 140),
+                        TextColor = Color3.fromRGB(255, 255, 255),
+                        AutoDismiss = false,
+                        Callback = function()
+                            pcall(function()
+                                if T.Current then
+                                    T.Current:Stop()
+                                    T.Current:Destroy()
+                                    T.Current = nil
+                                end
+                            end)
+                        end
+                    },
+                    "rbxassetid://116559368303288"                     
+                )
+            end
+        end
+    end)
 end
