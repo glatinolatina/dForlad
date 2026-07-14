@@ -4870,6 +4870,7 @@ getgenv().SelectedQuest = nil
 getgenv().AutoUseStandSkillKey = "E"
 getgenv().LastQuestNotifyTime = 0
 getgenv().QuestNotifyCooldown = 5
+getgenv().PreviousQuest = nil
 
 QuestLeft:Slider("Delay (seconds)", false, 0.05, 2, 2, function(value)
     getgenv().QuestDelay = tonumber(value) or 2
@@ -5009,14 +5010,17 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                 if getgenv().AutoSelectBestQuest then
                     local bestQuest = GetBestQuestForLevel(playerLevel)
                     if bestQuest and bestQuest ~= getgenv().SelectedQuest then
+                        -- Quest switched! Save previous quest for turn-in, mark as needing new quest
+                        getgenv().PreviousQuest = getgenv().SelectedQuest
                         getgenv().SelectedQuest = bestQuest
+                        getgenv().CompletedQuest = true
                         pcall(function()
                             if QuestDropdown and QuestDropdown.Set then
                                 QuestDropdown:Set(bestQuest)
                             end
                         end)
                         task.spawn(function()
-                            Window:Notify("Quest", "Leveled up! Switched to: " .. bestQuest, 3)
+                            Window:Notify("Quest", "Switched to: " .. bestQuest, 3)
                         end)
                     end
                 else
@@ -5026,8 +5030,9 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                             local bestQuest = GetBestQuestForLevel(playerLevel)
                             if bestQuest then
                                 getgenv().SelectedQuest = bestQuest
+                                getgenv().CompletedQuest = true
                                 task.spawn(function()
-                                    Window:Notify("Quest", "Auto-adjusted to level " .. GetQuestLevelRequirement(bestQuest) .. " quest: " .. bestQuest, 3)
+                                    Window:Notify("Quest", "Auto-adjusted to: " .. bestQuest, 3)
                                 end)
                             end
                         end
@@ -5035,8 +5040,9 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                         local bestQuest = GetBestQuestForLevel(playerLevel)
                         if bestQuest then
                             getgenv().SelectedQuest = bestQuest
+                            getgenv().CompletedQuest = true
                             task.spawn(function()
-                                Window:Notify("Quest", "Auto-selected quest: " .. bestQuest, 3)
+                                Window:Notify("Quest", "Auto-selected: " .. bestQuest, 3)
                             end)
                         end
                     end
@@ -5077,6 +5083,15 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                             task.wait(2)
                             continue
                         end
+                    end
+
+                    -- If we have a previous quest from switching, turn it in first
+                    if getgenv().PreviousQuest and getgenv().PreviousQuest ~= "" then
+                        local prevNPC = workspace:FindFirstChild("Dialogues") and workspace.Dialogues:FindFirstChild(getgenv().PreviousQuest)
+                        if prevNPC then
+                            pcall(function() TurnInQuest(prevNPC) end)
+                        end
+                        getgenv().PreviousQuest = nil
                     end
 
                     local questNPC = workspace:FindFirstChild("Dialogues") and workspace.Dialogues:FindFirstChild(questName)
