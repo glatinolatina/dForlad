@@ -2668,7 +2668,7 @@ local function notifyStand()
 end
 
 local function handleStandSummonBug(featureName)
-    Window:Notify(featureName, "Stand bug detected. Respawning...", 3)
+    Window:Notify(featureName, ".", 3)
     getStandCharacter().Humanoid.Health = 0
     standWaitUntilNewChar()
     task.wait(0.2)
