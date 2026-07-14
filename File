@@ -5435,7 +5435,7 @@ end)
 StandFarmRight:Paragraph("Rib Farm Info", Color3.fromRGB(140, 140, 140))
 StandFarmRight:Paragraph("Uses all Rib Cages one by one. Good for getting rib stands without Stand Farm mode.", Color3.fromRGB(140, 140, 140))
 
-StandFarmRight:Toggle("Enable Rib Farm (Use All Ribs)", false, function(state)
+StandFarmRight:Toggle("Enable Rib Farm", false, function(state)
     if state then
         if normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn then
             Window:Notify("Rib Farm", "Item Farm is running! Disable it first.", 3)
