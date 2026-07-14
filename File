@@ -5,6 +5,7 @@ local Window = Library:NaJa({
     Desc = "By Truly Yours",
     Bind = Enum.KeyCode.K,
     Search = true,
+    Discord = "https://discord.gg/vCKZFjaTv4"
 })
 
 local player = game.Players.LocalPlayer
@@ -5454,7 +5455,13 @@ end)
 
 UtilityLeft = UtilityTab:Section("Combat Utilities", "Left", "shield")
 
+UtilityLeft:Paragraph("This script is currently being built so there are many features coming soon.", Color3.fromRGB(255, 200, 0))
+
 UtilityLeft:Toggle("Anti Timestop", false, function(state)
+    do
+        Window:Notify("Utility", "Feature unavailable due to a problem please wait for the dev to fix this", 5)
+        return
+    end
     antiTSEnabled = state
     if state then
         startAntiTSDetection()
