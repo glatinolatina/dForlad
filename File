@@ -5,7 +5,6 @@ local Window = Library:NaJa({
     Desc = "By Diablo",
     Bind = Enum.KeyCode.K,
     Search = true,
-    Discord = "https://discord.gg/vCKZFjaTv4"
 })
 
 local player = game.Players.LocalPlayer
