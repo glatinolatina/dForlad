@@ -501,7 +501,10 @@ local function KillEnemy(Enemy)
         if Character and Character:FindFirstChildWhichIsA("Humanoid") and Character:FindFirstChildWhichIsA("Humanoid").Health > 0 then
             if getgenv().QuestMethod == "With Stand" then
                 if not HasStand() then
-                    Window:Notify("Quest", "No stand! Get roka/arrow first.", 3)
+                    if not getgenv().NoStandNotified then
+                        Window:Notify("Quest", "No stand! Get roka/arrow first.", 3)
+                        getgenv().NoStandNotified = true
+                    end
                     return
                 end
                 EquipStand()
@@ -4876,6 +4879,7 @@ getgenv().QuestMethod = "With Stand"
 getgenv().CompletedQuest = true
 getgenv().QuestFarmEnabled = false
 getgenv().NPCFarmEnabled = false
+getgenv().NoStandNotified = false
 getgenv().TargetNPC = ""
 getgenv().SelectedQuest = nil
 getgenv().AutoUseStandSkillKey = "E"
@@ -5053,12 +5057,18 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                 
                 if getgenv().QuestMethod == "With Stand" then
                     if playerLevel >= 3 and not HasStand() then
-                        Window:Notify("Quest", "Need stand for questing! Please get a stand first.", 3)
+                        if not getgenv().NoStandNotified then
+                            Window:Notify("Quest", "Need stand for questing! Please get a stand first.", 3)
+                            getgenv().NoStandNotified = true
+                        end
                         task.wait(3)
                         continue
                     end
                     if IsPlayerReady() then
                         EquipStand()
+                    end
+                    if HasStand() then
+                        getgenv().NoStandNotified = false
                     end
                 end
                 
@@ -5237,6 +5247,7 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
         end)
     else
         Window:Notify("Quest", "Quest Farm stopped!", 3)
+        getgenv().NoStandNotified = false
         disableNoclip()
     end
 end)
