@@ -5,7 +5,6 @@ local Window = Library:NaJa({
     Desc = "By Truly Yours",
     Bind = Enum.KeyCode.K,
     Search = true,
-    Discord = "https://discord.gg/vCKZFjaTv4"
 })
 
 local player = game.Players.LocalPlayer
@@ -2036,6 +2035,10 @@ local function enableItemNotifier()
                 TextColor = Color3.fromRGB(255, 255, 255),
                 AutoDismiss = false,
             Callback = function()
+                do
+                    Window:Notify("Pickup", "Feature unavailable due to a problem please wait for the dev to fix this", 5)
+                    return
+                end
                 if normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn then
                     Window:Notify("Pickup", "Item Farm is running! Disable farming first.", 3)
                     return
@@ -2076,25 +2079,20 @@ local function enableItemNotifier()
                     return
                 end
 
-                -- Save original method and set to Down
                 local originalMethod = getgenv().InstantMethod
                 getgenv().InstantMethod = "Down"
                 enableNoclip()
 
-                -- Teleport to item using Down method (sticks below item)
                 pcall(function()
                     travelToInstant(itemPart)
                 end)
 
-                -- WAIT for stick to settle before picking up
                 task.wait(0.5)
 
-                -- Fire the proximity prompt
                 pcall(function()
                     fireproximityprompt(prompt, 1)
                 end)
 
-                -- Keep firing RemoteEvent until item is gone or timeout
                 local startTime = tick()
                 repeat
                     pcall(function()
@@ -2106,11 +2104,9 @@ local function enableItemNotifier()
 
                 local collected = not parentModel:FindFirstChild("ProximityPrompt")
 
-                -- Cleanup: remove stick attachments and restore method
                 cleanupItemStick()
                 getgenv().InstantMethod = originalMethod or "Up"
 
-                -- Return to original position
                 if returnPos then
                     task.wait(0.2)
                     local hrp2 = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
@@ -2143,7 +2139,6 @@ local function disableItemNotifier()
     end
 end
 
--- // SPECTATE PLAYER SYSTEM
 local spectateEnabled = false
 local selectedSpectatePlayer = nil
 local spectateTween = nil
@@ -2171,7 +2166,6 @@ local function spectateTarget(targetPlayer)
     local humanoid = char:FindFirstChildWhichIsA("Humanoid")
     if not hrp or not humanoid or humanoid.Health <= 0 then return end
 
-    -- Clean up old camera hooks if any
     if spectateTween then
         pcall(function() spectateTween:Cancel() end)
         spectateTween = nil
@@ -2181,7 +2175,6 @@ local function spectateTarget(targetPlayer)
         spectateConnection = nil
     end
 
-    -- Use FocusCam just like quest farming does
     local localChar = player.Character
     if not localChar then return end
     local localHum = localChar:FindFirstChildWhichIsA("Humanoid")
@@ -4287,6 +4280,10 @@ if getgenv().MethionBypassLoaded then
             end
             if getgenv().QuestFarmEnabled or getgenv().NPCFarmEnabled then
                 Window:Notify("Auto Prestige", "Quest Farm is running! Disable it first.", 5)
+                return
+            end
+            if not HasStand() then
+                Window:Notify("Auto Prestige", "You must have a single stand for this to work please get a stand first", 5)
                 return
             end
         end
