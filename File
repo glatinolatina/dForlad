@@ -350,19 +350,20 @@ local function GetQuest(NPC)
     if not DialogueNameObj or not Character or not Character:FindFirstChild("RemoteEvent") then
         return false
     end
-    
+
     local DialogueName = DialogueNameObj.Value
     local Event = Character:FindFirstChild("RemoteEvent")
     local player = GetPlayer()
-    
+
+    -- Fire DialogueInteracted instantly
     pcall(function()
         Event:FireServer("DialogueInteracted", {
             ["DialogueName"] = DialogueName,
             ["Speaker"] = NPC.Name
         })
     end)
-    task.wait(0.2)
-    
+
+    -- Fire all dialogue options instantly without waiting
     for dialogueNum = 1, 8 do
         for optionNum = 1, 3 do
             pcall(function()
@@ -372,10 +373,9 @@ local function GetQuest(NPC)
                     ["Dialogue"] = "Dialogue" .. tostring(dialogueNum)
                 })
             end)
-            task.wait(0.08)
         end
     end
-    
+
     local specialPatterns = {
         {Dialogue = "Dialogue2", Option = "Option1"},
         {Dialogue = "Dialogue4", Option = "Option1"},
@@ -384,7 +384,7 @@ local function GetQuest(NPC)
         {Dialogue = "Dialogue3", Option = "Option1"},
         {Dialogue = "Dialogue5", Option = "Option1"},
     }
-    
+
     for _, pattern in ipairs(specialPatterns) do
         pcall(function()
             Event:FireServer("EndDialogue", {
@@ -393,19 +393,9 @@ local function GetQuest(NPC)
                 ["Dialogue"] = pattern.Dialogue
             })
         end)
-        task.wait(0.1)
     end
-    
-    task.wait(0.05)
-    if player and player:FindFirstChild("PlayerStats") then
-        local currentQuest = player.PlayerStats:FindFirstChild("CurrentQuest")
-        if currentQuest and currentQuest.Value ~= "" then
-            getgenv().CompletedQuest = false
-            pcall(function() Window:Notify("YBA Script", "Quest taken: " .. NPC.Name, 3) end)
-            return true
-        end
-    end
-    
+
+    -- Fire and forget - immediately set quest as taken and return
     getgenv().CompletedQuest = false
     return true
 end
@@ -417,18 +407,19 @@ local function TurnInQuest(NPC)
     if not DialogueNameObj or not Character or not Character:FindFirstChild("RemoteEvent") then
         return false
     end
-    
+
     local DialogueName = DialogueNameObj.Value
     local Event = Character:FindFirstChild("RemoteEvent")
-    
+
+    -- Fire DialogueInteracted instantly
     pcall(function()
         Event:FireServer("DialogueInteracted", {
             ["DialogueName"] = DialogueName,
             ["Speaker"] = NPC.Name
         })
     end)
-    task.wait(0.2)
-    
+
+    -- Fire all dialogue options instantly without waiting
     for dialogueNum = 1, 8 do
         pcall(function()
             Event:FireServer("EndDialogue", {
@@ -437,18 +428,13 @@ local function TurnInQuest(NPC)
                 ["Dialogue"] = "Dialogue" .. tostring(dialogueNum)
             })
         end)
-        task.wait(0.1)
     end
-    
-    task.wait(0.3)
-    local player = GetPlayer()
-    if player and player:FindFirstChild("PlayerStats") then
-        local currentQuest = player.PlayerStats:FindFirstChild("CurrentQuest")
-        if currentQuest and currentQuest.Value == "" then
-            return true
-        end
-    end
-    return false
+
+    -- Fire and forget - immediately return
+    task.spawn(function()
+        Window:Notify("Quest", "Quest turned in: " .. NPC.Name, 2)
+    end)
+    return true
 end
 
 local function UseMove(Move)
@@ -4882,6 +4868,8 @@ getgenv().NoStandNotified = false
 getgenv().TargetNPC = ""
 getgenv().SelectedQuest = nil
 getgenv().AutoUseStandSkillKey = "E"
+getgenv().LastQuestNotifyTime = 0
+getgenv().QuestNotifyCooldown = 5
 
 QuestLeft:Slider("Delay (seconds)", false, 0.05, 2, 2, function(value)
     getgenv().QuestDelay = tonumber(value) or 2
@@ -5090,37 +5078,32 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                             continue
                         end
                     end
-                    
+
                     local questNPC = workspace:FindFirstChild("Dialogues") and workspace.Dialogues:FindFirstChild(questName)
-                    
+
                     if questNPC then
-                        local turnInSuccess = false
-                        pcall(function() turnInSuccess = TurnInQuest(questNPC) end)
-                        if turnInSuccess then
-                            task.spawn(function()
-                                Window:Notify("Quest", "Quest turned in: " .. questName, 2)
-                            end)
-                        end
-                        
-                    local success = false
-                    pcall(function() success = GetQuest(questNPC) end)
-                    
-                    if success then
+                        -- Turn in quest instantly (fire and forget)
+                        pcall(function() TurnInQuest(questNPC) end)
+
+                        -- Take new quest instantly (fire and forget)
+                        pcall(function() GetQuest(questNPC) end)
+
+                        -- IMMEDIATELY mark as not completed so farming starts right away
                         getgenv().CompletedQuest = false
+
+                        -- Notification with cooldown to prevent spam
                         task.spawn(function()
-                            Window:Notify("Quest", "Successfully took quest: " .. questName, 3)
+                            local now = tick()
+                            if now - (getgenv().LastQuestNotifyTime or 0) >= (getgenv().QuestNotifyCooldown or 5) then
+                                getgenv().LastQuestNotifyTime = now
+                                Window:Notify("Quest", "Fuck yall lazy ass", 3)
+                            end
                         end)
-                    else
-                        task.spawn(function()
-                            Window:Notify("Quest", "Failed to take quest, retrying...", 3)
-                        end)
-                        task.wait(0.1)
-                    end
                     else
                         Window:Notify("Quest", "Quest NPC not found: " .. tostring(questName), 3)
                         task.wait(1)
                     end
-                else
+else
                     local questName = getgenv().SelectedQuest
                     local questData = QuestInfo[questName]
                     
