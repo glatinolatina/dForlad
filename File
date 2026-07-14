@@ -1,9 +1,10 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ErasedDiavolo/Test/refs/heads/main/badr"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ErasedDiavolo/Test1/refs/heads/main/hah"))()
 
 local Window = Library:NaJa({
     Title = "Truly Yours Yba",
     Desc = "By Truly Yours",
     Bind = Enum.KeyCode.K,
+    Search = true,
     Discord = "https://discord.gg/vCKZFjaTv4"
 })
 
