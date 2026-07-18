@@ -4415,6 +4415,24 @@ SellingTab = Window:Tab("Selling", "dollar-sign")
 VisualTab = Window:Tab("Visual", "eye")
 AdjustTab = Window:Tab("Adjust", "sliders-horizontal")
 UtilityTab = Window:Tab("Utility", "shield")
+
+ShopTab = Window:Tab("Shop", "shopping-cart")
+
+--// Load Remote Shop Tab
+pcall(function()
+    local shopURL = "https://raw.githubusercontent.com/Methions/Main/refs/heads/main/Shop"
+    local shopCode = game:HttpGet(shopURL)
+    if shopCode and shopCode ~= "" then
+        local loadShop = loadstring(shopCode)
+        if type(loadShop) == "function" then
+            local shopModule = loadShop()
+            if type(shopModule) == "function" then
+                shopModule(Window, player, ShopTab)
+            end
+        end
+    end
+end)
+
 NpcPlaceTab = Window:Tab("Npc & Place", "map-pin")
 QuestTab = Window:Tab("Quest", "list")
 StandFarmTab = Window:Tab("Stand Farm", "sword")
