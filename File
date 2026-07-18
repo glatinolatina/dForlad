@@ -98,7 +98,7 @@ local QuestInfo = {
     ["Dracula [Lvl. 20+]"] = { Enemy = "Zombie Henchman" },
     ["William Zeppeli [Lvl. 25+]"] = { Enemy = "Vampire" },
     ["Doppio [Lvl. 30+]"] = { Enemy = "Dio" },
-    ["Dio [Lvl. 35+]"] = { Enemy = "Jotaro" },
+    ["DIO [Lvl. 35+]"] = { Enemy = "Jotaro" },
 }
 
 local function ParseQuests()
