@@ -4881,37 +4881,51 @@ do
 
     N.l:Button("Goto", N.g)
 
-    N.r:Paragraph("Place", Color3.fromRGB(140, 140, 140))
-    N.r:InputSmall("Name", "place name", function(v) N.p.n = v end)
-    N.r:InputSmall("Coords", "X, Y, Z", function(v)
-        local x,y,z = v:match("([-%d%.]+)%s*,%s*([-%d%.]+)%s*,%s*([-%d%.]+)")
-        if x then
-            N.p.c = Vector3.new(tonumber(x), tonumber(y), tonumber(z))
-            Window:Notify("Place", "Set!", 3)
-        end
-    end)
-    N.r:Button("Save Pos", function()
-        local h = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-        if not h then return end
-        N.p.c = h.Position
-        Window:Notify("Place", string.format("%.1f, %.1f, %.1f", h.Position.X, h.Position.Y, h.Position.Z), 3)
-    end)
-    N.r:Button("Goto Place", function()
-        if not N.p.c then
-            Window:Notify("Place", "No coords set!", 3)
+    N.places = {
+        ["Eli's Pizzeria"] = Vector3.new(122.69, 6.03, 71.46),
+        ["The bar"] = Vector3.new(393.76, -31.44, -173.44),
+        ["Naples Accessories"] = Vector3.new(500.17, 0.89, -50.89),
+        ["The Arcade"] = Vector3.new(247.69, 1.83, -261.03),
+        ["Main Spawn"] = Vector3.new(-64.29, 0.01, -783.49),
+        ["Train Station"] = Vector3.new(-265.90, -5.02, 16.11),
+        ["The boss' Cafe'"] = Vector3.new(-511.37, -25.37, -175.21),
+        ["Merchants Keep"] = Vector3.new(-681.71, -25.43, -332.09),
+        ["Naples' Sewer"] = Vector3.new(-118.30, -33.49, 60.21),
+        ["Heaven Arena"] = Vector3.new(8553.44, -479.19, 8159.71),
+        ["The Tallest Peak"] = Vector3.new(-242.75, 284.20, 353.13),
+        ["Fountain"] = Vector3.new(446.50, 30.85, -283.28),
+        ["Diavolo's Mansion"] = Vector3.new(1136.51, 116.67, -137.72),
+    }
+
+    N.placeNames = {}
+    for name, _ in pairs(N.places) do
+        table.insert(N.placeNames, name)
+    end
+    table.sort(N.placeNames)
+
+    N.selectedPlace = N.placeNames[1]
+
+    N.placeDropdown = N.r:Dropdown("Place", N.placeNames, N.placeNames[1], function(selected)
+        N.selectedPlace = selected
+    end, true)
+
+    N.r:Button("Goto", function()
+        if not N.selectedPlace or not N.places[N.selectedPlace] then
+            Window:Notify("Place", "Select a place first!", 3)
             return
         end
         local h = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
         if not h then return end
+        local t = N.places[N.selectedPlace]
         if getgenv().MethionBypassLoaded then
             local o = getgenv().InstantMethod
             getgenv().InstantMethod = "Up"
-            travelToInstant(CFrame.new(N.p.c))
+            travelToInstant(CFrame.new(t))
             getgenv().InstantMethod = o or "Up"
-            Window:Notify("Place", "Goto (Instant)", 3)
+            Window:Notify("Place", "Goto " .. N.selectedPlace .. " (Instant)", 3)
         else
-            travelToTween(N.p.c, function() return true end)
-            Window:Notify("Place", "Goto (Tween)", 3)
+            travelToTween(t, function() return true end)
+            Window:Notify("Place", "Goto " .. N.selectedPlace .. " (Tween)", 3)
         end
     end)
 end
