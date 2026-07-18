@@ -97,7 +97,7 @@ local QuestInfo = {
     ["Homeless Man Jill [Lvl. 15+]"] = { Item = "Gold Coin", Amount = 10 },
     ["Dracula [Lvl. 20+]"] = { Enemy = "Zombie Henchman" },
     ["William Zeppeli [Lvl. 25+]"] = { Enemy = "Vampire" },
-    ["Doppio [Lvl. 30+]"] = { Enemy = "Dio" },
+    ["Doppio [Lvl. 30+]"] = { Enemy = "DIO" },
     ["DIO [Lvl. 35+]"] = { Enemy = "Jotaro" },
 }
 
