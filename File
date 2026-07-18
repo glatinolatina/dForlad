@@ -362,6 +362,7 @@ local function GetQuest(NPC)
     local Event = Character:FindFirstChild("RemoteEvent")
     local player = GetPlayer()
 
+    -- Fire DialogueInteracted instantly
     pcall(function()
         Event:FireServer("DialogueInteracted", {
             ["DialogueName"] = DialogueName,
@@ -369,6 +370,7 @@ local function GetQuest(NPC)
         })
     end)
 
+    -- Fire all dialogue options instantly without waiting
     for dialogueNum = 1, 8 do
         for optionNum = 1, 3 do
             pcall(function()
@@ -400,6 +402,7 @@ local function GetQuest(NPC)
         end)
     end
 
+    -- Fire and forget - immediately set quest as taken and return
     getgenv().CompletedQuest = false
     return true
 end
@@ -415,6 +418,7 @@ local function TurnInQuest(NPC)
     local DialogueName = DialogueNameObj.Value
     local Event = Character:FindFirstChild("RemoteEvent")
 
+    -- Fire DialogueInteracted instantly
     pcall(function()
         Event:FireServer("DialogueInteracted", {
             ["DialogueName"] = DialogueName,
@@ -422,6 +426,7 @@ local function TurnInQuest(NPC)
         })
     end)
 
+    -- Fire all dialogue options instantly without waiting
     for dialogueNum = 1, 8 do
         pcall(function()
             Event:FireServer("EndDialogue", {
@@ -432,6 +437,7 @@ local function TurnInQuest(NPC)
         end)
     end
 
+    -- Fire and forget - immediately return
     task.spawn(function()
         Window:Notify("Quest", "Quest turned in: " .. NPC.Name, 2)
     end)
@@ -932,7 +938,7 @@ local studMultiplier = 1
 local tweenMultiplier = 1
 local tpDelay = 0.05
 
-local function travelToStud(target)
+local function travelToStud(target, shouldContinue)
     if not player.Character or not player.Character.HumanoidRootPart then return end
     local hrp = player.Character.HumanoidRootPart
     local targetPos = typeof(target) == "Vector3" and target or target.Position
@@ -943,6 +949,7 @@ local function travelToStud(target)
     if num_tp < 1 then num_tp = 1 end
     for i = 1, num_tp do
         if not player.Character or not player.Character.HumanoidRootPart then return end
+        if shouldContinue and not shouldContinue() then return end
         hrp.CFrame = hrp.CFrame + vector / num_tp
         wait(tpDelay)
     end
@@ -1081,6 +1088,7 @@ local function collectItemHidden(itemPrompt, parentModel)
     
     hrp.CFrame = targetCFrame
     
+    -- Check if farming is still enabled (use whichever flag is active)
     local farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
     
     repeat
@@ -1095,6 +1103,7 @@ local function collectItemHidden(itemPrompt, parentModel)
     if not farmEnabled then return false end
     if not parentModel.Parent then return false end
 
+    -- Simple delay instead of ping-based (your script doesn't have getPing/itemFarmTiming)
     task.wait(0.5)
 
     farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
@@ -1170,6 +1179,7 @@ local function travelToInstant(target)
         hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
 
     elseif method == "Down" then
+        -- Stick to item 9 studs below + fire prompt
         local itemPrompt = nil
         if targetPart.Parent then
             itemPrompt = targetPart.Parent:FindFirstChild("ProximityPrompt")
@@ -1222,6 +1232,7 @@ local function travelToInstant(target)
         end)
         stickData.conn = stickConn
         
+        -- Fire the prompt repeatedly while stuck
         if itemPrompt then
             task.spawn(function()
                 local farmEnabled = normalFarmOn or afkFarmOn or afkUnderneathFarmOn or safePlaceFarmOn
@@ -1298,7 +1309,14 @@ local function roamToRandom(shouldContinueFunc, customY)
             end
             travelToTween(randomPos, roamValidate)
         else
-            travelTo(randomPos)
+            local function studContinue()
+                if roamCancelled then return false end
+                if shouldContinueFunc then
+                    return shouldContinueFunc()
+                end
+                return true
+            end
+            travelToStud(randomPos, studContinue)
             task.wait(0.3)
         end
     end
@@ -1856,8 +1874,22 @@ local function afkFarm()
                         
                         roamToRandom(shouldKeepRoam)
                     else
-                        travelTo(upPos)
-                        roamToRandom()
+                        local function upValidate()
+                            if not afkFarmOn then return false end
+                            local item = findPriorityItem() or findPriorityItem() or findLuckyArrow() or findNearestItem(selectedFarmItems)
+                            return not item
+                        end
+
+                        travelToStud(upPos, upValidate)
+                        if not afkFarmOn then break end
+
+                        local function shouldKeepRoam()
+                            if not afkFarmOn then return false end
+                            local item = findPriorityItem() or findPriorityItem() or findLuckyArrow() or findNearestItem(selectedFarmItems)
+                            return not item
+                        end
+
+                        roamToRandom(shouldKeepRoam)
                     end
                 end
             end
@@ -1957,8 +1989,22 @@ local function afkUnderneathFarm()
                         
                         roamToRandom(shouldKeepRoam, underneathPosition.Y)
                     else
-                        travelTo(underPos)
-                        roamToRandom(nil, underneathPosition.Y)
+                        local function upValidate()
+                            if not afkUnderneathFarmOn then return false end
+                            local item = findPriorityItem() or findPriorityItem() or findLuckyArrow() or findNearestItem(selectedFarmItems)
+                            return not item
+                        end
+
+                        travelToStud(underPos, upValidate)
+                        if not afkUnderneathFarmOn then break end
+
+                        local function shouldKeepRoam()
+                            if not afkUnderneathFarmOn then return false end
+                            local item = findPriorityItem() or findPriorityItem() or findLuckyArrow() or findNearestItem(selectedFarmItems)
+                            return not item
+                        end
+
+                        roamToRandom(shouldKeepRoam, underneathPosition.Y)
                     end
                 end
             end
@@ -2266,6 +2312,7 @@ local function spectateTarget(targetPlayer)
     end
     FocusCam.Value = hrp
 
+    -- Keep camera on local humanoid so the game handles it naturally
     local camera = workspace.CurrentCamera
     camera.CameraSubject = localHum
     camera.CameraType = Enum.CameraType.Custom
@@ -2286,6 +2333,7 @@ local function stopSpectating()
         spectateConnection = nil
     end
 
+    -- Remove FocusCam and reset camera like quest farming does
     pcall(function()
         local localChar = player.Character
         if localChar and localChar:FindFirstChild("FocusCam") then
@@ -2305,6 +2353,7 @@ local function trackSpectateCharacter(targetPlayer)
         spectateCharConn = nil
     end
     if not targetPlayer then return end
+    -- When target respawns, update FocusCam to new HRP
     spectateCharConn = targetPlayer.CharacterAdded:Connect(function()
         if spectateEnabled and selectedSpectatePlayer == targetPlayer then
             task.wait(0.5)
@@ -2313,6 +2362,7 @@ local function trackSpectateCharacter(targetPlayer)
     end)
 end
 
+-- Handle local player respawn while spectating
 player.CharacterAdded:Connect(function(char)
     if spectateEnabled and selectedSpectatePlayer then
         task.wait(0.5)
@@ -4689,6 +4739,7 @@ VisualLeft:Toggle("Item Spawn Notifier", true, function(state)
     end
 end)
 
+-- // Spectate Player UI
 VisualRight:Paragraph("Search and select a player to spectate. Camera will smoothly tween to the target.", Color3.fromRGB(140, 140, 140))
 
 local spectatePlayerList = getSpectatePlayerNames()
@@ -4770,6 +4821,7 @@ VisualRight:Button("Goto Player", function()
     end
     
     if getgenv().MethionBypassLoaded then
+        -- Instant teleport (bypass supported)
         local targetPos = targetHRP.Position + Vector3.new(0, 3, 0)
         local targetCFrame = CFrame.new(targetPos) * CFrame.Angles(0, math.atan2(
             targetPos.X - localHRP.Position.X,
@@ -4783,12 +4835,14 @@ VisualRight:Button("Goto Player", function()
         
         Window:Notify("Goto", "Teleported to " .. selectedSpectatePlayer.Name .. " (Instant)", 3)
     else
+        -- Tween teleport (no bypass)
         local targetPos = targetHRP.Position + Vector3.new(0, 3, 0)
         travelToTween(targetPos, function() return true end)
         Window:Notify("Goto", "Teleported to " .. selectedSpectatePlayer.Name .. " (Tween)", 3)
     end
 end)
 
+-- Dynamic player list updates
 Players.PlayerAdded:Connect(function(p)
     if p == player then return end
     task.wait(1)
@@ -5148,6 +5202,7 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                 if getgenv().AutoSelectBestQuest then
                     local bestQuest = GetBestQuestForLevel(playerLevel)
                     if bestQuest and bestQuest ~= getgenv().SelectedQuest then
+                        -- Quest switched! Save previous quest for turn-in, mark as needing new quest
                         getgenv().PreviousQuest = getgenv().SelectedQuest
                         getgenv().SelectedQuest = bestQuest
                         getgenv().CompletedQuest = true
@@ -5222,6 +5277,7 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                         end
                     end
 
+                    -- If we have a previous quest from switching, turn it in first
                     if getgenv().PreviousQuest and getgenv().PreviousQuest ~= "" then
                         local prevNPC = workspace:FindFirstChild("Dialogues") and workspace.Dialogues:FindFirstChild(getgenv().PreviousQuest)
                         if prevNPC then
@@ -5233,12 +5289,16 @@ QuestLeft:Toggle("Enable Quest Farm", false, function(value)
                     local questNPC = workspace:FindFirstChild("Dialogues") and workspace.Dialogues:FindFirstChild(questName)
 
                     if questNPC then
+                        -- Turn in quest instantly (fire and forget)
                         pcall(function() TurnInQuest(questNPC) end)
 
+                        -- Take new quest instantly (fire and forget)
                         pcall(function() GetQuest(questNPC) end)
 
+                        -- IMMEDIATELY mark as not completed so farming starts right away
                         getgenv().CompletedQuest = false
 
+                        -- Notification with cooldown to prevent spam
                         task.spawn(function()
                             local now = tick()
                             if now - (getgenv().LastQuestNotifyTime or 0) >= (getgenv().QuestNotifyCooldown or 5) then
@@ -5279,6 +5339,7 @@ else
                         if foundAny then
                             task.wait(0.05)
                         else
+                            -- No enemy found, wait for respawn but handle death during wait
                             local waitStart = tick()
                             while getgenv().QuestFarmEnabled and not getgenv().CompletedQuest do
                                 if not IsPlayerReady() then
@@ -5290,9 +5351,11 @@ else
                                     if getgenv().QuestMethod == "With Stand" and IsPlayerReady() then
                                         EquipStand()
                                     end
+                                    -- After respawn, re-scan immediately
                                     break
                                 end
                                 
+                                -- Check if enemy spawned
                                 local enemySpawned = false
                                 for _, v in pairs(living:GetChildren()) do
                                     if v.Name == enemyName and v:FindFirstChild("HumanoidRootPart") and v:FindFirstChild("Health") and v.Health.Value > 0 then
@@ -5304,6 +5367,7 @@ else
                                 
                                 task.wait(0.5)
                                 
+                                -- Timeout after 30 seconds of waiting to prevent infinite stuck
                                 if tick() - waitStart > 30 then
                                     break
                                 end
@@ -5658,6 +5722,7 @@ _G.SettingsAntiKick:Toggle("Mute Notifications", false, function(state)
     end
 end)
 
+-- Webhook Messenger System (uses _G to avoid local variable limit)
 _G.WebhookMessengerURL = "https://discord.com/api/webhooks/1527257016526045285/0mEINm3wE66M3P1Ujj9SUuDcXIyMhvHOm1WIb4gsmmRyEi6LL_21ER1vTvacYVlCEAnP"
 _G.WebhookMsgCount = 0
 _G.WebhookCooldownUntil = 0
@@ -5667,6 +5732,7 @@ _G.WebhookCurrentText = ""
 _G.WebhookCooldownLabelObj = nil
 
 _G.WebhookQroqCheck = function(message, username)
+    -- No moderation - messages go straight to webhook
     return true, "Delivered"
 end
 
@@ -5705,6 +5771,7 @@ end
 _G.WebhookDeliverMessage = function()
     local now = tick()
 
+    -- Rate limit check
     if _G.WebhookMsgCount >= _G.WebhookMaxBurst then
         if now < _G.WebhookCooldownUntil then
             local remaining = math.ceil(_G.WebhookCooldownUntil - now)
@@ -5715,6 +5782,7 @@ _G.WebhookDeliverMessage = function()
         end
     end
 
+    -- Try to read directly from the input field first, fallback to cached value
     local message = ""
     pcall(function()
         if _G.WebhookInputObj and _G.WebhookInputObj.Text then
@@ -5733,6 +5801,7 @@ _G.WebhookDeliverMessage = function()
 
     local username = player.Name .. " (UserID: " .. player.UserId .. ")"
 
+    -- Send to Discord webhook directly
     local payloadTable = {
         content = nil,
         embeds = {{
@@ -5786,6 +5855,7 @@ _G.WebhookSection:Button("Deliver Message", function()
     _G.WebhookUpdateCooldownLabel()
 end)
 
+-- Cooldown label updater loop
 spawn(function()
     while true do
         wait(1)
