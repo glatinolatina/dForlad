@@ -1,4 +1,4 @@
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/ErasedDiavolo/Test1/refs/heads/main/hah"))()
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/Methions/Fudge/refs/heads/main/3"))()
 
 local Window = Library:NaJa({
     Title = "Yba Methion (Nano)",
@@ -6,6 +6,13 @@ local Window = Library:NaJa({
     Bind = Enum.KeyCode.K,
     Search = true,
 })
+
+_G.NotificationsDisabled = false
+_G._originalNotify = Window.Notify
+Window.Notify = function(self, title, message, duration, icon, buttonConfig, imageId)
+    if _G.NotificationsDisabled then return end
+    return _G._originalNotify(self, title, message, duration, icon, buttonConfig, imageId)
+end
 
 local player = game.Players.LocalPlayer
 local RunService = game:GetService("RunService")
@@ -1277,34 +1284,37 @@ local function roamToRandom(shouldContinueFunc, customY)
         minZ = -520, maxZ = 530,
         y = customY or 100
     }
-    
+
     roaming = true
     roamCancelled = false
-    
+
     while roaming and (not shouldContinueFunc or shouldContinueFunc()) do
         if roamCancelled then
             roaming = false
             return
         end
-        
+
         local randomX = math.random(bounds.minX, bounds.maxX)
         local randomZ = math.random(bounds.minZ, bounds.maxZ)
         local randomPos = Vector3.new(randomX, bounds.y, randomZ)
-        
-        local function roamValidate()
-            if roamCancelled then return false end
-            if shouldContinueFunc then
-                return shouldContinueFunc()
+
+        if travelMethod == "Tween" then
+            local function roamValidate()
+                if roamCancelled then return false end
+                if shouldContinueFunc then
+                    return shouldContinueFunc()
+                end
+                return true
             end
-            return true
+            travelToTween(randomPos, roamValidate)
+        else
+            travelTo(randomPos)
+            task.wait(0.3)
         end
-        
-        travelToTween(randomPos, roamValidate)
     end
-    
+
     roaming = false
 end
-
 local function stopRoam()
     roamCancelled = true
     roaming = false
@@ -1418,7 +1428,11 @@ local function normalFarm()
 
             if instantPickup then
                 instantTravelTo(itemPart)
-                wait(1)
+                if _G.AntiKickSafePlaceEnabled then
+                    wait(1.5)
+                else
+                    wait(1)
+                end
                 if normalFarmOn and v and v.Parent then
                     checkAndSellMax()
                     fireproximityprompt(proxPrompt, 0, true)
@@ -1523,19 +1537,45 @@ local function safePlaceFarm()
                     instantTravelTo(itemPart)
 
                     if getgenv().InstantMethod == "Down" then
-                        wait(0.5)
-                        local stickStart = tick()
-                        while tick() - stickStart < 3 do
+                        if _G.AntiKickSafePlaceEnabled then
+                            wait(0.8)
+                        else
+                            wait(0.5)
+                        end
+                        _G._downStart = tick()
+                        while tick() - _G._downStart < 3 do
                             if not v or not v.Parent then break end
-                            fireproximityprompt(proxPrompt, 0, true)
-                            wait(0.1)
-                            updateItems()
-                            if (items[itemName] or 0) > originalCount then
-                                break
+                            if _G.AntiKickSafePlaceEnabled and not _G._isFpsStable() then
+                                wait(0.1)
+                            else
+                                fireproximityprompt(proxPrompt, 0, true)
+                                if _G.AntiKickSafePlaceEnabled then
+                                    wait(0.25)
+                                else
+                                    wait(0.1)
+                                end
+                                updateItems()
+                                if (items[itemName] or 0) > originalCount then
+                                    break
+                                end
                             end
                         end
                     else
-                        wait(0.3)
+                        _G._verifyStart = tick()
+                        while true do
+                            _G._verifyHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                            if _G._verifyHrp and (_G._verifyHrp.Position - itemPart.Position).Magnitude < 3 then
+                                if not _G.AntiKickSafePlaceEnabled then break end
+                                if _G._isFpsStable() then break end
+                            end
+                            if tick() - _G._verifyStart > 2.5 then break end
+                            wait()
+                        end
+                        if _G.AntiKickSafePlaceEnabled then
+                            wait(0.8)
+                        else
+                            wait(0.6)
+                        end
                     end
                 else
                     if travelMethod == "Tween" then
@@ -1545,7 +1585,11 @@ local function safePlaceFarm()
                     else
                         travelTo(itemPart)
                     end
-                    wait(0.3)
+                    if _G.AntiKickSafePlaceEnabled then
+                        wait(0.5)
+                    else
+                        wait(0.3)
+                    end
                 end
 
                 checkAndSellMax()
@@ -1553,11 +1597,20 @@ local function safePlaceFarm()
                 local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
                 local maxDist = (travelMethod == "Instant" and getgenv().InstantMethod == "Down") and 12 or 5
                 if hrp and (itemPart.Position - hrp.Position).Magnitude < maxDist then
-                    updateItems()
-                    if (items[itemName] or 0) <= originalCount then
-                        for i = 1, 3 do
-                            fireproximityprompt(proxPrompt, 0, true)
-                            wait(0.1)
+                    if not _G.AntiKickSafePlaceEnabled or _G._isFpsStable() then
+                        updateItems()
+                        if (items[itemName] or 0) <= originalCount then
+                            if _G.AntiKickSafePlaceEnabled then
+                                wait(0.3)
+                            end
+                            for i = 1, 3 do
+                                fireproximityprompt(proxPrompt, 0, true)
+                                if _G.AntiKickSafePlaceEnabled then
+                                    wait(0.25)
+                                else
+                                    wait(0.1)
+                                end
+                            end
                         end
                     end
                 end
@@ -1618,19 +1671,45 @@ local function safePlaceFarm()
                     instantTravelTo(itemPart)
 
                     if getgenv().InstantMethod == "Down" then
-                        wait(0.5)
-                        local stickStart = tick()
-                        while tick() - stickStart < 3 do
+                        if _G.AntiKickSafePlaceEnabled then
+                            wait(0.8)
+                        else
+                            wait(0.5)
+                        end
+                        _G._downStart = tick()
+                        while tick() - _G._downStart < 3 do
                             if not v or not v.Parent then break end
-                            fireproximityprompt(proxPrompt, 0, true)
-                            wait(0.1)
-                            updateItems()
-                            if (items[itemName] or 0) > originalCount then
-                                break
+                            if _G.AntiKickSafePlaceEnabled and not _G._isFpsStable() then
+                                wait(0.1)
+                            else
+                                fireproximityprompt(proxPrompt, 0, true)
+                                if _G.AntiKickSafePlaceEnabled then
+                                    wait(0.25)
+                                else
+                                    wait(0.1)
+                                end
+                                updateItems()
+                                if (items[itemName] or 0) > originalCount then
+                                    break
+                                end
                             end
                         end
                     else
-                        wait(0.3)
+                        _G._verifyStart = tick()
+                        while true do
+                            _G._verifyHrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                            if _G._verifyHrp and (_G._verifyHrp.Position - itemPart.Position).Magnitude < 3 then
+                                if not _G.AntiKickSafePlaceEnabled then break end
+                                if _G._isFpsStable() then break end
+                            end
+                            if tick() - _G._verifyStart > 2.5 then break end
+                            wait()
+                        end
+                        if _G.AntiKickSafePlaceEnabled then
+                            wait(0.8)
+                        else
+                            wait(0.6)
+                        end
                     end
                 else
                     if travelMethod == "Tween" then
@@ -1640,7 +1719,11 @@ local function safePlaceFarm()
                     else
                         travelTo(itemPart)
                     end
-                    wait(0.3)
+                    if _G.AntiKickSafePlaceEnabled then
+                        wait(0.5)
+                    else
+                        wait(0.3)
+                    end
                 end
 
                 checkAndSellMax()
@@ -1648,11 +1731,20 @@ local function safePlaceFarm()
                 local hrp = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
                 local maxDist = (travelMethod == "Instant" and getgenv().InstantMethod == "Down") and 12 or 5
                 if hrp and (itemPart.Position - hrp.Position).Magnitude < maxDist then
-                    updateItems()
-                    if (items[itemName] or 0) <= originalCount then
-                        for i = 1, 3 do
-                            fireproximityprompt(proxPrompt, 0, true)
-                            wait(0.1)
+                    if not _G.AntiKickSafePlaceEnabled or _G._isFpsStable() then
+                        updateItems()
+                        if (items[itemName] or 0) <= originalCount then
+                            if _G.AntiKickSafePlaceEnabled then
+                                wait(0.3)
+                            end
+                            for i = 1, 3 do
+                                fireproximityprompt(proxPrompt, 0, true)
+                                if _G.AntiKickSafePlaceEnabled then
+                                    wait(0.25)
+                                else
+                                    wait(0.1)
+                                end
+                            end
                         end
                     end
                 end
@@ -1712,7 +1804,11 @@ local function afkFarm()
 
                 if instantPickup then
                     instantTravelTo(itemPart)
-                    wait(1)
+                    if _G.AntiKickSafePlaceEnabled then
+                        wait(1.5)
+                    else
+                        wait(1)
+                    end
                     if afkFarmOn and v and v.Parent then
                         checkAndSellMax()
                         fireproximityprompt(proxPrompt, 0, true)
@@ -1809,7 +1905,11 @@ local function afkUnderneathFarm()
 
                 if instantPickup then
                     instantTravelTo(itemPart)
-                    wait(1)
+                    if _G.AntiKickSafePlaceEnabled then
+                        wait(1.5)
+                    else
+                        wait(1)
+                    end
                     if afkUnderneathFarmOn and v and v.Parent then
                         checkAndSellMax()
                         fireproximityprompt(proxPrompt, 0, true)
@@ -2286,7 +2386,8 @@ local function instantTravelTo(target, waitTime)
     local hrp = player.Character.HumanoidRootPart
     local targetPos = typeof(target) == "Vector3" and target or target.Position
     hrp.CFrame = CFrame.new(targetPos + Vector3.new(0, 0.10, 0))
-
+    hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+    hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
     if waitTime then
         wait(waitTime)
     end
@@ -4232,6 +4333,47 @@ local function stopAntiTSDetection()
     end
 end
 
+_G.AntiKickSafePlaceEnabled = false
+_G._fpsFrameTimes = {}
+_G._fpsConn = nil
+_G._lastStableFps = 60
+
+_G._startFpsMonitor = function()
+    if _G._fpsConn then return end
+    _G._fpsFrameTimes = {}
+    _G._lastStableFps = 60
+    _G._fpsConn = RunService.Heartbeat:Connect(function(dt)
+        table.insert(_G._fpsFrameTimes, dt)
+        if #_G._fpsFrameTimes > 60 then
+            table.remove(_G._fpsFrameTimes, 1)
+        end
+    end)
+end
+
+_G._stopFpsMonitor = function()
+    if _G._fpsConn then
+        _G._fpsConn:Disconnect()
+        _G._fpsConn = nil
+    end
+    _G._fpsFrameTimes = {}
+end
+
+_G._isFpsStable = function()
+    if not _G.AntiKickSafePlaceEnabled then return true end
+    if #_G._fpsFrameTimes < 10 then return false end
+    _G._avgDt = 0
+    _G._spikes = 0
+    for _, t in ipairs(_G._fpsFrameTimes) do
+        _G._avgDt = _G._avgDt + t
+        if t > 0.1 then _G._spikes = _G._spikes + 1 end
+    end
+    _G._avgDt = _G._avgDt / #_G._fpsFrameTimes
+    _G._lastStableFps = math.floor(1 / _G._avgDt)
+    if _G._avgDt > 0.08 then return false end
+    if _G._spikes > 2 then return false end
+    return true
+end
+
 FarmingTab = Window:Tab("Item Farming", "philippine-peso")
 SellingTab = Window:Tab("Selling", "dollar-sign")
 VisualTab = Window:Tab("Visual", "eye")
@@ -5382,7 +5524,7 @@ StandFarmLeft:MultiDropdown("Stands to Farm", standOptions, {}, function(options
     end
 end, true)
 
-StandFarmLeft:Toggle("Stop on Any Shiny", false, function(state)
+StandFarmLeft:Toggle("Stop on Shinys", false, function(state)
     stopOnShiny = state
 end)
 
@@ -5395,7 +5537,7 @@ StandFarmLeft:Toggle("Auto Collect Arrow/Roka", false, function(state)
     end
 end)
 
-StandFarmLeft:Toggle("Swap to Empty Slot on Desired", false, function(state)
+StandFarmLeft:Toggle("Auto Swap Empty Stand Slot", false, function(state)
     swapSlotOnDesired = state
     if state then
         Window:Notify("Stand Farm", "Make sure you have Empty slot(s).", 3)
@@ -5504,6 +5646,173 @@ end)
 
 SettingsRight:Button("Destroy Window", function()
 end)
+
+_G.SettingsAntiKick = SettingsTab:Section("Anti-Kick", "Right", "shield")
+
+_G.SettingsAntiKick:Paragraph("Session Stability", Color3.fromRGB(140, 140, 140))
+_G.SettingsAntiKick:AnimatedParagraph("WARNING: Enabling this will slow down your farming performance. Only use it if you are experiencing frequent server kicks.", 0.04, Color3.fromRGB(255, 180, 60))
+
+_G.SettingsAntiKick:Toggle("Enable Stability Control", false, function(state)
+    _G.AntiKickSafePlaceEnabled = state
+    if state then
+        _G._startFpsMonitor()
+        Window:Notify("Anti-Kick", "Stability Control enabled. FPS monitor active.", 3)
+    else
+        _G._stopFpsMonitor()
+        Window:Notify("Anti-Kick", "Stability Control disabled.", 3)
+    end
+end)
+
+_G.SettingsAntiKick:Toggle("Mute Notifications", false, function(state)
+    _G.NotificationsDisabled = state
+    if state then
+        _G._originalNotify(Window, "Notifications", "All notifications muted.", 3)
+    else
+        _G._originalNotify(Window, "Notifications", "Notifications are now unmuted.", 3)
+    end
+end)
+
+-- Webhook Messenger System (uses _G to avoid local variable limit)
+_G.WebhookMessengerURL = "https://discord.com/api/webhooks/1527257016526045285/0mEINm3wE66M3P1Ujj9SUuDcXIyMhvHOm1WIb4gsmmRyEi6LL_21ER1vTvacYVlCEAnP"
+_G.WebhookMsgCount = 0
+_G.WebhookCooldownUntil = 0
+_G.WebhookMaxBurst = 2
+_G.WebhookCooldownSeconds = 60
+_G.WebhookCurrentText = ""
+_G.WebhookCooldownLabelObj = nil
+
+_G.WebhookQroqCheck = function(message, username)
+    -- No moderation - messages go straight to webhook
+    return true, "Delivered"
+end
+
+_G.WebhookGetCooldownText = function()
+    local now = tick()
+    if _G.WebhookMsgCount < _G.WebhookMaxBurst then
+        return "Ready | " .. (_G.WebhookMaxBurst - _G.WebhookMsgCount) .. " message(s) remaining"
+    end
+    if now < _G.WebhookCooldownUntil then
+        local remaining = math.ceil(_G.WebhookCooldownUntil - now)
+        return "Cooldown | " .. remaining .. " second(s) left before next send"
+    end
+    _G.WebhookMsgCount = 0
+    return "Ready | " .. _G.WebhookMaxBurst .. " message(s) remaining"
+end
+
+_G.WebhookSendRequest = function(url, payload)
+    local requestFunc = syn and syn.request or http_request or request or httprequest
+    if not requestFunc then
+        return false, "No HTTP request function available"
+    end
+    local ok, res = pcall(function()
+        return requestFunc({
+            Url = url,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = payload
+        })
+    end)
+    if not ok then
+        return false, tostring(res)
+    end
+    return true, res
+end
+
+_G.WebhookDeliverMessage = function()
+    local now = tick()
+
+    -- Rate limit check
+    if _G.WebhookMsgCount >= _G.WebhookMaxBurst then
+        if now < _G.WebhookCooldownUntil then
+            local remaining = math.ceil(_G.WebhookCooldownUntil - now)
+            Window:Notify("Webhook", "Please wait " .. remaining .. "s before sending again.", 3)
+            return
+        else
+            _G.WebhookMsgCount = 0
+        end
+    end
+
+    -- Try to read directly from the input field first, fallback to cached value
+    local message = ""
+    pcall(function()
+        if _G.WebhookInputObj and _G.WebhookInputObj.Text then
+            message = _G.WebhookInputObj.Text
+        elseif _G.WebhookInputObj and _G.WebhookInputObj.Value then
+            message = _G.WebhookInputObj.Value
+        end
+    end)
+    if message == "" then
+        message = _G.WebhookCurrentText or ""
+    end
+    if message:gsub("%s+", "") == "" then
+        Window:Notify("Webhook", "Please enter a message first!", 3)
+        return
+    end
+
+    local username = player.Name .. " (UserID: " .. player.UserId .. ")"
+
+    -- Send to Discord webhook directly
+    local payloadTable = {
+        content = nil,
+        embeds = {{
+            title = "YBA Methion Report",
+            description = "📨 **Report from " .. username .. "**\n\n📝 **Message:**\n" .. message,
+            color = 3447003,
+            timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+            footer = { text = "Webhook Messenger" }
+        }}
+    }
+
+    local ok, err = _G.WebhookSendRequest(_G.WebhookMessengerURL, game:GetService("HttpService"):JSONEncode(payloadTable))
+
+    if ok then
+        _G.WebhookMsgCount = _G.WebhookMsgCount + 1
+        if _G.WebhookMsgCount >= _G.WebhookMaxBurst then
+            _G.WebhookCooldownUntil = now + _G.WebhookCooldownSeconds
+        end
+        _G.WebhookCurrentText = ""
+        Window:Notify("Webhook", "Message delivered successfully! " .. _G.WebhookGetCooldownText(), 3)
+    else
+        Window:Notify("Webhook", "Failed to send: " .. tostring(err), 3)
+    end
+end
+
+_G.WebhookUpdateCooldownLabel = function()
+    if _G.WebhookCooldownLabelObj then
+        local text = _G.WebhookGetCooldownText()
+        pcall(function()
+            if _G.WebhookCooldownLabelObj.Set then
+                _G.WebhookCooldownLabelObj:Set(text)
+            elseif _G.WebhookCooldownLabelObj.Text then
+                _G.WebhookCooldownLabelObj.Text = text
+            end
+        end)
+    end
+end
+
+_G.WebhookSection = SettingsTab:Section("Webhook Messenger", "Left", "message-circle")
+
+_G.WebhookSection:Paragraph("Send reports or messages to the developer. You can send 2 messages per minute.", Color3.fromRGB(140, 140, 140))
+
+_G.WebhookInputObj = _G.WebhookSection:InputLarge("Enter Message", "Type your report here...", function(value)
+    _G.WebhookCurrentText = value or ""
+end)
+
+_G.WebhookCooldownLabelObj = _G.WebhookSection:Paragraph(_G.WebhookGetCooldownText(), Color3.fromRGB(100, 255, 100))
+
+_G.WebhookSection:Button("Deliver Message", function()
+    _G.WebhookDeliverMessage()
+    _G.WebhookUpdateCooldownLabel()
+end)
+
+-- Cooldown label updater loop
+spawn(function()
+    while true do
+        wait(1)
+        _G.WebhookUpdateCooldownLabel()
+    end
+end)
+
 
 if getgenv().MethionBypassLoaded then
     if getgenv().MethionBypassInjected then
