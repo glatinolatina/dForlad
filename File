@@ -1356,8 +1356,10 @@ MessagesMsgSection = MessagesMsgTab:Section("Message", "Left", "message-circle")
 MessagesMsgSection:Paragraph("For (Hirokawah) Go to selling and disable the auto sell on max", Color3.fromRGB(255, 60, 60))
 MessagesMsgSection = MessagesMsgTab:Section("Message", "Right", "message-circle")
 MessagesMsgSection:Paragraph("For (Overb7714) The config is still on development so its not working right now please be patient while i work on it", Color3.fromRGB(255, 60, 60))
+MessagesMsgSection = MessagesMsgTab:Section("Message", "Right", "message-circle")
+MessagesMsgSection:Paragraph("For (iana_4lene300) Yes im not gonna spend all my time on this script but i will be and always be active on this script and you asked (but will you at least update it in case it stopped working?) Yes", Color3.fromRGB(255, 60, 60))
 MessagesMsgSection = MessagesMsgTab:Section("Message", "Left", "message-circle")
-MessagesMsgSection:Paragraph("For (iana_4lene300) There is no discord server and probably never will im not put all my time on this script so it will not have a discord server", Color3.fromRGB(255, 60, 60))
+MessagesMsgSection:Paragraph("For (Hannah_Ganda777) i forgot to remove the theme so ill be removing it now My Bad", Color3.fromRGB(255, 60, 60))
 
 SettingsTab = Window:Tab("Settings", "settings")
 
@@ -1789,10 +1791,6 @@ end)
 
 SettingsLeft:Button("Trash All Saved Configs", function()
     Window:Notify("Settings", "All configs deleted", 3)
-end)
-
-SettingsLeft:Dropdown("Theme Changer", {"Dark", "Light", "Rose", "Sky", "Plant", "Red", "Indigo", "Amber", "Violet", "Emerald", "Midnight", "Crimson", "MonokaiPro", "CottonCandy", "Rainbow", "AzuresTheme", "MethionGradient"}, "MethionGradient", function(theme)
-    Window:Notify("Settings", "Theme changed! Theme: " .. theme, 3)
 end)
 
 SettingsRight:Button("Destroy Window", function()
