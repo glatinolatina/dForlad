@@ -1359,7 +1359,7 @@ MessagesMsgSection:Paragraph("For (Overb7714) The config is still on development
 MessagesMsgSection = MessagesMsgTab:Section("Message", "Right", "message-circle")
 MessagesMsgSection:Paragraph("For (iana_4lene300) Yes im not gonna spend all my time on this script but i will be and always be active on this script and you asked (but will you at least update it in case it stopped working?) Yes", Color3.fromRGB(255, 60, 60))
 MessagesMsgSection = MessagesMsgTab:Section("Message", "Left", "message-circle")
-MessagesMsgSection:Paragraph("For (Hannah_Ganda777) i forgot to remove the theme so ill be removing it now My Bad", Color3.fromRGB(255, 60, 60))
+MessagesMsgSection:Paragraph("For (Hannah_Ganda777) no the theme is not part of the script i just forgot to remove it or maybe just maybe ill put a custom theme just maybe. ill be removing it now My Bad", Color3.fromRGB(255, 60, 60))
 
 SettingsTab = Window:Tab("Settings", "settings")
 
