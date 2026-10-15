@@ -4,6 +4,7 @@ local TweenService = game:GetService("TweenService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
+local PhysicsService = game:GetService("PhysicsService")
 
 local AIRFLOW_LIBRARY_URL = "https://raw.githubusercontent.com/Methions/modf/refs/heads/main/airflow"
 local libraryOk, AirflowLibrary = pcall(function()
@@ -504,8 +505,8 @@ local Config = {
             ["Vampire Hideout"] = Vector3.new(396.8, -31.5, -174.0),
         },
     },
-    Player = {JumpPowerEnabled = false, JumpPower = 50, NoClipEnabled = false, WalkSpeedEnabled = false, WalkSpeed = 32, WalkSpeedOriginal = nil},
-    Trolling = {GlitchEnabled = false, TargetPlayers = {}},
+    Player = {JumpPowerEnabled = false, JumpPower = 24, JumpPowerOriginal = nil, JumpUseJumpPowerOriginal = nil, NoClipEnabled = false, WalkSpeedEnabled = false, WalkSpeed = 24, WalkSpeedOriginal = nil},
+    Trolling = {TargetPlayers = {}},
 }
 
 local State = {
@@ -2298,12 +2299,12 @@ function Player.humanoid()
 end
 
 function Player.jump()
+    if not Config.Player.JumpPowerEnabled then return end
     local hum = Player.humanoid()
     if not hum then return end
-    if Config.Player.JumpPowerEnabled then
-        hum.UseJumpPower = true
-        hum.JumpPower = Config.Player.JumpPower
-    end
+    hum.UseJumpPower = true
+    local power = math.clamp(tonumber(Config.Player.JumpPower) or 24, 1, 200)
+    if hum.JumpPower ~= power then hum.JumpPower = power end
 end
 
 function Player.noclip()
@@ -2318,14 +2319,36 @@ end
 
 function Player.resetJump()
     local hum = Player.humanoid()
-    if hum then hum.JumpPower = 50 end
+    if hum then
+        hum.JumpPower = tonumber(Config.Player.JumpPowerOriginal) or 50
+        if Config.Player.JumpUseJumpPowerOriginal ~= nil then
+            hum.UseJumpPower = Config.Player.JumpUseJumpPowerOriginal
+        end
+    end
+    Config.Player.JumpPowerOriginal = nil
+    Config.Player.JumpUseJumpPowerOriginal = nil
+end
+
+function Player.enableJumpPower(enabled)
+    local hum = Player.humanoid()
+    if enabled then
+        if hum and Config.Player.JumpPowerOriginal == nil then
+            Config.Player.JumpPowerOriginal = hum.JumpPower
+            Config.Player.JumpUseJumpPowerOriginal = hum.UseJumpPower
+        end
+        Config.Player.JumpPowerEnabled = true
+        Player.jump()
+    else
+        Config.Player.JumpPowerEnabled = false
+        Player.resetJump()
+    end
 end
 
 function Player.applyWalkSpeed()
     if not Config.Player.WalkSpeedEnabled then return end
     local hum = Player.humanoid()
     if hum then
-        local speed = math.clamp(tonumber(Config.Player.WalkSpeed) or 32, 16, 150)
+        local speed = math.clamp(tonumber(Config.Player.WalkSpeed) or 24, 1, 200)
         if hum.WalkSpeed ~= speed then hum.WalkSpeed = speed end
     end
 end
@@ -2347,25 +2370,11 @@ function Player.enableWalkSpeed(enabled)
 end
 
 _G.MethionWalkSpeedRuntime = _G.MethionWalkSpeedRuntime or {}
-if _G.MethionWalkSpeedRuntime.Heartbeat then pcall(function() _G.MethionWalkSpeedRuntime.Heartbeat:Disconnect() end) end
-if _G.MethionWalkSpeedRuntime.CharacterAdded then pcall(function() _G.MethionWalkSpeedRuntime.CharacterAdded:Disconnect() end) end
-_G.MethionWalkSpeedRuntime.LastApply = 0
-_G.MethionWalkSpeedRuntime.Heartbeat = RunService.Heartbeat:Connect(function()
-    if not Config.Player.WalkSpeedEnabled then return end
-    local now = tick()
-    if now - (_G.MethionWalkSpeedRuntime.LastApply or 0) < 0.2 then return end
-    _G.MethionWalkSpeedRuntime.LastApply = now
-    pcall(Player.applyWalkSpeed)
-end)
-_G.MethionWalkSpeedRuntime.CharacterAdded = LP.CharacterAdded:Connect(function(character)
-    task.spawn(function()
-        local hum = character:WaitForChild("Humanoid", 10)
-        if hum and Config.Player.WalkSpeedEnabled then
-            local speed = math.clamp(tonumber(Config.Player.WalkSpeed) or 32, 16, 150)
-            pcall(function() hum.WalkSpeed = speed end)
-        end
-    end)
-end)
+for _, connectionName in ipairs({"Heartbeat", "CharacterAdded"}) do
+    local connection = _G.MethionWalkSpeedRuntime[connectionName]
+    if connection then pcall(function() connection:Disconnect() end) end
+    _G.MethionWalkSpeedRuntime[connectionName] = nil
+end
 
 local LowGfx = {}
 
@@ -2457,47 +2466,6 @@ function Shop.autoLucky()
             end
         end
     end)
-end
-
-local Troll = {}
-
-local function trollAlive()
-    local char = LP.Character
-    if not char then return false end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return false end
-    return hum.Health > 0
-end
-
-local function trollTargets()
-    local list = {}
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LP and plr.Character then
-            for _, name in ipairs(Config.Trolling.TargetPlayers) do
-                if name == plr.Name then
-                    local root = plr.Character:FindFirstChild("HumanoidRootPart")
-                    if root then table.insert(list, root) end
-                    break
-                end
-            end
-        end
-    end
-    return list
-end
-
-function Troll.run()
-    if not Config.Trolling.GlitchEnabled then return end
-    if not trollAlive() then return end
-    local char = LP.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local list = trollTargets()
-    if #list == 0 then return end
-    local front = hrp.Position + hrp.CFrame.LookVector * 6
-    local cf = CFrame.new(front, front + hrp.CFrame.LookVector)
-    for _, root in ipairs(list) do
-        pcall(function() root.CFrame = cf end)
-    end
 end
 
 local Weather = {ActivePreset = "Original"}
@@ -2957,12 +2925,6 @@ function Loops.spectate()
                 end
             end
         end
-    end)
-end
-
-function Loops.trolling()
-    RunService.RenderStepped:Connect(function()
-        Troll.run()
     end)
 end
 
@@ -5700,14 +5662,23 @@ SellTab:Button({
     end,
 })
 
+do
 local PlayerTab = Window:Tab({Title = "Misc", Icon = "user-round-cog"})
 _G.__MethionMiscSections = _G.__MethionMiscSections or {}
-_G.__MethionMiscSections.Dialogue = PlayerTab:Section({Title = "Dialogue Actions", Side = "left"})
-_G.__MethionMiscSections.Environment = PlayerTab:Section({Title = "Environment", Side = "right"})
+_G.__MethionMiscSections.Dialogue = PlayerTab:Section({Title = "Dialogue / Skills", Side = "left"})
+_G.__MethionMiscSections.Environment = PlayerTab:Section({Title = "Environment", Side = "left"})
 _G.__MethionMiscSections.Movement = PlayerTab:Section({Title = "Character Movement", Side = "left"})
+
+local function miscNotify(title, content, kind)
+    pcall(function()
+        if CompatWindow then
+            CompatWindow:Notify({Title = title, Content = content, Type = kind or "Info", Duration = 4})
+        end
+    end)
+end
 _G.__MethionMiscSections.Dialogue:Paragraph({
-    Title = "Dialogue Actions",
-    Desc = "Manually trigger selected NPC dialogue prompts.",
+    Title = "Dialogue / Skills",
+    Desc = "Trigger selected NPC dialogue prompts and learn character skills.",
 })
 _G.__MethionMiscSections.Dialogue:Button({
     Title = "Talk to Jesus",
@@ -5734,121 +5705,902 @@ _G.__MethionMiscSections.Dialogue:Button({
 
 local antiVamp = false
 local antiVampConn = nil
-local antiVampOrig = {ClockTime = nil, Brightness = nil, AtmosphereDensity = nil}
 
-local function saveAntiVamp()
-    if antiVampOrig.ClockTime ~= nil then return end
-    antiVampOrig.ClockTime = Lighting.ClockTime
-    antiVampOrig.Brightness = Lighting.Brightness
-    local atm = Lighting:FindFirstChild("Atmosphere")
-    antiVampOrig.AtmosphereDensity = atm and atm.Density or nil
+local function enforceHumanRace()
+    local stats = LP:FindFirstChild("PlayerStats")
+    local race = stats and stats:FindFirstChild("Race")
+    if race and race:IsA("StringValue") and race.Value ~= "Human" then
+        race.Value = "Human"
+    end
 end
 
 _G.__MethionMiscSections.Environment:Toggle({
     Title = "Anti Vamp Burn",
-    Desc = "Permanent night - no sun burn",
+    Desc = "Keep your race set to Human to prevent vampire sun damage.",
     Icon = "moon",
     Value = false,
     Callback = function(state)
-        antiVamp = state
-        if state then
-            saveAntiVamp()
-            if antiVampConn then antiVampConn:Disconnect() end
-            antiVampConn = RunService.Heartbeat:Connect(function()
+        antiVamp = state == true
+        if antiVamp then
+            if antiVampConn then pcall(function() antiVampConn:Disconnect() end) end
+            pcall(enforceHumanRace)
+            local elapsed = 0
+            antiVampConn = RunService.Heartbeat:Connect(function(dt)
                 if not antiVamp then return end
-                pcall(function()
-                    Lighting.ClockTime = 0
-                    Lighting.Brightness = 0.5
-                    local atm = Lighting:FindFirstChild("Atmosphere")
-                    if atm then atm.Density = 0 end
-                end)
+                elapsed += dt
+                if elapsed < 0.5 then return end
+                elapsed = 0
+                pcall(enforceHumanRace)
             end)
+            miscNotify("Anti Vamp Burn", "Anti Vamp Burn enabled.", "Success")
         else
             if antiVampConn then
-                antiVampConn:Disconnect()
+                pcall(function() antiVampConn:Disconnect() end)
                 antiVampConn = nil
             end
-            pcall(function()
-                if antiVampOrig.ClockTime then Lighting.ClockTime = antiVampOrig.ClockTime end
-                if antiVampOrig.Brightness then Lighting.Brightness = antiVampOrig.Brightness end
-                if antiVampOrig.AtmosphereDensity then
-                    local atm = Lighting:FindFirstChild("Atmosphere")
-                    if atm then atm.Density = antiVampOrig.AtmosphereDensity end
-                end
-            end)
+            miscNotify("Anti Vamp Burn", "Anti Vamp Burn stopped. The current race value was left as-is.", "Info")
         end
     end,
 })
-_G.__MethionMiscSections.Movement:Divider()
-_G.__MethionMiscSections.Movement:Toggle({
+
+_G.__MethionMiscSections.Dialogue:Button({
+    Title = "Learn Worthiness",
+    Desc = "Request Worthiness I through V from the Character skill tree.",
+    Icon = "book-open",
+    Callback = function()
+        task.spawn(function()
+            local skills = {"Worthiness", "Worthiness II", "Worthiness III", "Worthiness IV", "Worthiness V"}
+            local sent = 0
+            for _, skillName in ipairs(skills) do
+                local character = LP.Character or LP.CharacterAdded:Wait()
+                local remoteFunction = character:FindFirstChild("RemoteFunction") or character:WaitForChild("RemoteFunction", 5)
+                if remoteFunction and remoteFunction:IsA("RemoteFunction") then
+                    local ok = pcall(function()
+                        remoteFunction:InvokeServer("LearnSkill", {
+                            Skill = skillName,
+                            SkillTreeType = "Character",
+                        })
+                    end)
+                    if ok then sent += 1 end
+                end
+                task.wait(0.1)
+            end
+            if sent == #skills then
+                miscNotify("Learn Worthiness", "Worthiness I-V requests sent.", "Success")
+            else
+                miscNotify("Learn Worthiness", tostring(sent) .. "/5 Worthiness requests sent. Check skill points and try again if needed.", "Warning")
+            end
+        end)
+    end,
+})
+local MovementSection = _G.__MethionMiscSections.Movement
+MovementSection:Divider()
+MovementSection:Toggle({
     Title = "No-Clip",
     Desc = "Walk through walls",
     Icon = "shield-off",
     Value = false,
     Callback = function(state)
-        Config.Player.NoClipEnabled = state
+        Config.Player.NoClipEnabled = state == true
         Player.noclip()
     end,
 })
-_G.__MethionMiscSections.Movement:Divider()
-_G.__MethionMiscSections.Movement:Toggle({
-    Title = "JumpPower",
-    Desc = "Enable custom jump power",
-    Icon = "arrow-up",
-    Value = false,
-    Callback = function(state)
-        Config.Player.JumpPowerEnabled = state
-        if state then Player.jump() else Player.resetJump() end
-    end,
-})
-_G.__MethionMiscSections.Movement:Slider({
-    Title = "JumpPower Value",
-    Desc = "Custom jump power",
-    Icon = "gauge",
-    Value = {Min = 50, Max = 125, Default = 50},
-    Step = 5,
-    Callback = function(v)
-        Config.Player.JumpPower = v
-        if Config.Player.JumpPowerEnabled then Player.jump() end
-    end,
-})
 
-_G.__MethionMiscSections.Movement:Divider()
-_G.__MethionMiscSections.Movement:Toggle({
-    Title = "Enable Walk Speed",
-    Desc = "Keep your custom walk speed active, including after respawning.",
+_G.MethionMovementState = _G.MethionMovementState or {
+    wsEnabled = false,
+    jpEnabled = false,
+    wsSpeed = 24,
+    jpPower = 24,
+    wsConn = nil,
+    jpConn = nil,
+}
+local MovementState = _G.MethionMovementState
+for _, key in ipairs({"wsConn", "jpConn"}) do
+    if MovementState[key] then pcall(function() MovementState[key]:Disconnect() end) end
+    MovementState[key] = nil
+end
+MovementState.wsEnabled = false
+MovementState.jpEnabled = false
+MovementState.wsSpeed = 24
+MovementState.jpPower = 24
+Config.Player.WalkSpeedEnabled = false
+Config.Player.JumpPowerEnabled = false
+Config.Player.WalkSpeed = 24
+Config.Player.JumpPower = 24
+
+_G.MethionGERFloatRuntime = _G.MethionGERFloatRuntime or {}
+local GERFloat = _G.MethionGERFloatRuntime
+for _, key in ipairs({"conn", "characterConn"}) do
+    if GERFloat[key] then pcall(function() GERFloat[key]:Disconnect() end) end
+    GERFloat[key] = nil
+end
+if GERFloat.track then pcall(function() GERFloat.track:Stop() end) end
+if GERFloat.anim then pcall(function() GERFloat.anim:Destroy() end) end
+GERFloat.enabled = false
+GERFloat.track = nil
+GERFloat.anim = nil
+GERFloat.boundCharacter = nil
+
+local function bindGERFloat(character)
+    if not GERFloat.enabled or not character then return end
+    if GERFloat.track then pcall(function() GERFloat.track:Stop() end) end
+    if GERFloat.anim then pcall(function() GERFloat.anim:Destroy() end) end
+    GERFloat.track = nil
+    GERFloat.anim = nil
+    GERFloat.boundCharacter = character
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 5)
+    if not humanoid or not GERFloat.enabled or LP.Character ~= character then return end
+
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://4638021147"
+    GERFloat.anim = animation
+    local ok, track = pcall(function() return humanoid:LoadAnimation(animation) end)
+    if ok and track then
+        GERFloat.track = track
+        track.Priority = Enum.AnimationPriority.Action
+        track.Looped = true
+        track:Play()
+    end
+end
+
+local function setGERFloat(enabled)
+    GERFloat.enabled = enabled == true
+    if GERFloat.conn then pcall(function() GERFloat.conn:Disconnect() end) GERFloat.conn = nil end
+    if GERFloat.characterConn then pcall(function() GERFloat.characterConn:Disconnect() end) GERFloat.characterConn = nil end
+    if not GERFloat.enabled then
+        if GERFloat.track then pcall(function() GERFloat.track:Stop() end) end
+        if GERFloat.anim then pcall(function() GERFloat.anim:Destroy() end) end
+        GERFloat.track = nil
+        GERFloat.anim = nil
+        GERFloat.boundCharacter = nil
+        return
+    end
+
+    if LP.Character then task.spawn(bindGERFloat, LP.Character) end
+    GERFloat.characterConn = LP.CharacterAdded:Connect(function(character)
+        task.wait(0.35)
+        if GERFloat.enabled then bindGERFloat(character) end
+    end)
+    GERFloat.conn = RunService.RenderStepped:Connect(function()
+        if not GERFloat.enabled then return end
+        local character = LP.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if root then
+            local velocity = root.AssemblyLinearVelocity
+            root.AssemblyLinearVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+        end
+    end)
+end
+
+local function giveClickTpTool()
+    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    if not backpack then
+        miscNotify("ClickTP", "Backpack is not ready yet.", "Warning")
+        return
+    end
+    local existing = backpack:FindFirstChild("ClickTP")
+    if not existing and LP.Character then existing = LP.Character:FindFirstChild("ClickTP") end
+    if existing then pcall(function() existing:Destroy() end) end
+
+    local tool = Instance.new("Tool")
+    tool.Name = "ClickTP"
+    tool.RequiresHandle = false
+    tool.CanBeDropped = false
+    tool.ToolTip = "Teleport to mouse click"
+    local busy = false
+    tool.Activated:Connect(function()
+        if busy then return end
+        busy = true
+        task.delay(0.08, function() busy = false end)
+        local character = LP.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if not root then return end
+        local mouse = LP:GetMouse()
+        local hit = mouse and mouse.Hit
+        if not hit then return end
+        root.CFrame = CFrame.new(hit.Position + Vector3.new(0, 3, 0))
+    end)
+    tool.Parent = backpack
+    miscNotify("ClickTP", "ClickTP added to your backpack.", "Success")
+end
+
+MovementSection:Button({
+    Title = "Give ClickTP Tool",
+    Desc = "Equip the tool and click to teleport to that location.",
+    Icon = "mouse-pointer-2",
+    Callback = giveClickTpTool,
+})
+MovementSection:Slider({
+    Title = "WalkSpeed",
+    Desc = "WalkSpeed value used while Enable WalkSpeed is on.",
+    Icon = "gauge",
+    Value = {Min = 1, Max = 200, Default = 24},
+    Step = 1,
+    Callback = function(value)
+        MovementState.wsSpeed = math.clamp(tonumber(value) or 24, 1, 200)
+        Config.Player.WalkSpeed = MovementState.wsSpeed
+    end,
+})
+MovementSection:Toggle({
+    Title = "Enable WalkSpeed",
+    Desc = "Continuously apply the selected speed, including after respawning.",
     Icon = "footprints",
     Value = false,
-    Callback = function(state)
-        Player.enableWalkSpeed(state)
+    Callback = function(enabled)
+        MovementState.wsEnabled = enabled == true
+        Config.Player.WalkSpeedEnabled = MovementState.wsEnabled
+        if MovementState.wsConn then pcall(function() MovementState.wsConn:Disconnect() end) MovementState.wsConn = nil end
+        if MovementState.wsEnabled then
+            MovementState.wsConn = RunService.RenderStepped:Connect(function()
+                pcall(function()
+                    local character = LP.Character
+                    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                    if humanoid then humanoid.WalkSpeed = MovementState.wsSpeed end
+                end)
+            end)
+        end
     end,
 })
-_G.__MethionMiscSections.Movement:Slider({
-    Title = "Walk Speed",
-    Desc = "Custom character movement speed (16–150).",
-    Icon = "gauge",
-    Value = {Min = 16, Max = 150, Default = 32},
-    Step = 2,
+MovementSection:Toggle({
+    Title = "GER Float",
+    Desc = "Use the float animation and keep vertical velocity at zero.",
+    Icon = "move-vertical",
+    Value = false,
+    Callback = function(enabled)
+        local ok, err = pcall(setGERFloat, enabled)
+        if not ok then
+            pcall(setGERFloat, false)
+            miscNotify("GER Float", tostring(err), "Warning")
+        end
+    end,
+})
+MovementSection:Slider({
+    Title = "JumpPower",
+    Desc = "JumpPower value used while Enable JumpPower is on.",
+    Icon = "arrow-up",
+    Value = {Min = 1, Max = 200, Default = 24},
+    Step = 1,
     Callback = function(value)
-        Config.Player.WalkSpeed = math.clamp(tonumber(value) or 32, 16, 150)
-        if Config.Player.WalkSpeedEnabled then Player.applyWalkSpeed() end
+        MovementState.jpPower = math.clamp(tonumber(value) or 24, 1, 200)
+        Config.Player.JumpPower = MovementState.jpPower
+    end,
+})
+MovementSection:Toggle({
+    Title = "Enable JumpPower",
+    Desc = "Continuously apply the selected jump power, including after respawning.",
+    Icon = "arrow-up-right",
+    Value = false,
+    Callback = function(enabled)
+        MovementState.jpEnabled = enabled == true
+        Config.Player.JumpPowerEnabled = MovementState.jpEnabled
+        if MovementState.jpConn then pcall(function() MovementState.jpConn:Disconnect() end) MovementState.jpConn = nil end
+        if MovementState.jpEnabled then
+            MovementState.jpConn = RunService.RenderStepped:Connect(function()
+                pcall(function()
+                    local character = LP.Character
+                    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                    if humanoid then humanoid.JumpPower = MovementState.jpPower end
+                end)
+            end)
+        end
     end,
 })
 
-local TrollingTab = Window:Tab({Title = "Trolling", Icon = "target"})
-TrollingTab:Paragraph({
-    Title = "Sticky Finger kill all",
-    Desc = "Working only with Sticky Fingers abilities",
-})
-TrollingTab:Divider()
-TrollingTab:Toggle({
-    Title = "Enable Glitch",
-    Desc = "Teleports selected players in front of you",
+_G.MethionAutoSprintRuntime = _G.MethionAutoSprintRuntime or {}
+local AutoSprint = _G.MethionAutoSprintRuntime
+if AutoSprint.conn then pcall(function() AutoSprint.conn:Disconnect() end) end
+AutoSprint.conn = nil
+AutoSprint.enabled = false
+local function setAutoSprint(enabled)
+    AutoSprint.enabled = enabled == true
+    if AutoSprint.conn then pcall(function() AutoSprint.conn:Disconnect() end) AutoSprint.conn = nil end
+    if not AutoSprint.enabled then return end
+    local lastToggleAt = 0
+    AutoSprint.conn = RunService.Heartbeat:Connect(function()
+        if not AutoSprint.enabled then return end
+        local character = LP.Character
+        if not character or character:GetAttribute("Sprinting") then return end
+        local now = tick()
+        if now - lastToggleAt < 0.25 then return end
+        local remoteFunction = character:FindFirstChild("RemoteFunction")
+        if not remoteFunction then return end
+        lastToggleAt = now
+        pcall(function() remoteFunction:InvokeServer("ToggleSprinting") end)
+    end)
+end
+MovementSection:Toggle({
+    Title = "Auto Sprint",
+    Desc = "Automatically toggle sprinting whenever your character is not sprinting.",
     Icon = "zap",
     Value = false,
-    Callback = function(state)
-        Config.Trolling.GlitchEnabled = state
+    Callback = function(enabled)
+        local ok, err = pcall(setAutoSprint, enabled)
+        if not ok then
+            pcall(setAutoSprint, false)
+            miscNotify("Auto Sprint", tostring(err), "Warning")
+        end
     end,
+})
+
+local StandPilotSection = PlayerTab:Section({Title = "Stand Pilot", Side = "right"})
+_G.MethionStandPilotRuntime = _G.MethionStandPilotRuntime or {}
+local StandPilot = _G.MethionStandPilotRuntime
+if type(StandPilot.Cleanup) == "function" then pcall(StandPilot.Cleanup) end
+for _, connection in pairs(StandPilot.Connections or {}) do
+    pcall(function() connection:Disconnect() end)
+end
+if StandPilot.InfiniteRangeConnection then pcall(function() StandPilot.InfiniteRangeConnection:Disconnect() end) end
+StandPilot.Enabled = false
+StandPilot.Connections = {}
+StandPilot.Collision = {}
+StandPilot.CollisionGroups = {}
+StandPilot.AlignStates = {}
+StandPilot.InfiniteRangeEnabled = false
+StandPilot.InfiniteRangeConnection = nil
+StandPilot.Character = nil
+StandPilot.Stand = nil
+StandPilot.Controller = nil
+StandPilot.FocusCam = nil
+StandPilot.AnimationTracks = {}
+StandPilot.AnimationObjects = {}
+StandPilot.Animator = nil
+StandPilot.ActiveMovementAnimation = nil
+StandPilot.WalkSpeed = 16
+StandPilot.RunSpeed = 44
+StandPilot.OriginalWalkSpeed = nil
+StandPilot.OriginalHipHeight = nil
+StandPilot.ActiveSpeedMode = nil
+
+local STAND_PILOT_GROUND_LIFT = 0.55
+local STAND_PILOT_ANIMATION_IDS = {
+    -- Both idle tracks were captured starting together, so keep them as a pair.
+    -- Movement priority lets the custom idle pose take precedence over the default idle animation.
+    {Name = "Idle", Id = "rbxassetid://4628343401", Priority = Enum.AnimationPriority.Movement},
+    {Name = "IdleSecondary", Id = "rbxassetid://4653736266", Priority = Enum.AnimationPriority.Movement},
+    {Name = "SlowWalk", Id = "rbxassetid://4773319528", Priority = Enum.AnimationPriority.Movement},
+    {Name = "Walk", Id = "rbxassetid://4653548217", Priority = Enum.AnimationPriority.Movement},
+    {Name = "Run", Id = "rbxassetid://5191325822", Priority = Enum.AnimationPriority.Action},
+}
+
+local function getStandMorph()
+    local character = LP.Character
+    return character and character:FindFirstChild("StandMorph")
+end
+
+local function getCharacterRemoteFunction(character)
+    character = character or LP.Character
+    if not character then return nil end
+    local remoteFunction = character:FindFirstChild("RemoteFunction")
+    if not remoteFunction then
+        local ok, result = pcall(function() return character:WaitForChild("RemoteFunction", 5) end)
+        if ok then remoteFunction = result end
+    end
+    return remoteFunction
+end
+
+local function resolveStandController(standMorph)
+    if not standMorph then return nil end
+    local humanoid = standMorph:FindFirstChildOfClass("Humanoid")
+    if humanoid then return humanoid end
+    return standMorph:FindFirstChildOfClass("AnimationController") or standMorph:FindFirstChild("AnimationController")
+end
+
+local function prepareStandPilotController(controller)
+    if not controller then return end
+
+    StandPilot.OriginalWalkSpeed = nil
+    StandPilot.OriginalHipHeight = nil
+    StandPilot.ActiveSpeedMode = nil
+
+    pcall(function()
+        local currentSpeed = controller.WalkSpeed
+        if type(currentSpeed) == "number" then
+            StandPilot.OriginalWalkSpeed = currentSpeed
+        end
+    end)
+
+    if controller:IsA("Humanoid") then
+        pcall(function()
+            StandPilot.OriginalHipHeight = controller.HipHeight
+            controller.HipHeight = StandPilot.OriginalHipHeight + STAND_PILOT_GROUND_LIFT
+        end)
+    end
+end
+
+local function applyStandPilotSpeed(modeName)
+    local controller = StandPilot.Controller
+    if not controller or not controller.Parent then return end
+
+    local desiredSpeed
+    if modeName == "Run" then
+        desiredSpeed = StandPilot.RunSpeed
+    elseif modeName == "SlowWalk" then
+        desiredSpeed = math.min(StandPilot.WalkSpeed, 8)
+    else
+        desiredSpeed = StandPilot.WalkSpeed
+    end
+
+    pcall(function()
+        controller.WalkSpeed = desiredSpeed
+    end)
+    StandPilot.ActiveSpeedMode = modeName
+end
+
+local function standPilotAnimationRate(modeName)
+    local rate = 1
+    if modeName == "Walk" then
+        rate = StandPilot.WalkSpeed / 18
+    elseif modeName == "SlowWalk" then
+        rate = math.min(StandPilot.WalkSpeed, 8) / 10
+    elseif modeName == "Run" then
+        rate = StandPilot.RunSpeed / 52
+    end
+    return math.clamp(rate, 0.55, 1.35)
+end
+
+local function clearStandPilotAnimations()
+    for _, track in pairs(StandPilot.AnimationTracks or {}) do
+        if track then pcall(function() track:Stop(0.12) end) end
+    end
+    for _, animation in pairs(StandPilot.AnimationObjects or {}) do
+        if animation then pcall(function() animation:Destroy() end) end
+    end
+    StandPilot.AnimationTracks = {}
+    StandPilot.AnimationObjects = {}
+    StandPilot.Animator = nil
+    StandPilot.ActiveMovementAnimation = nil
+end
+
+local function bindStandPilotAnimations(stand, controller)
+    clearStandPilotAnimations()
+    if not stand or not controller then return end
+
+    local animator = controller:FindFirstChildOfClass("Animator")
+    if not animator and (controller:IsA("Humanoid") or controller:IsA("AnimationController")) then
+        local ok, created = pcall(function()
+            local newAnimator = Instance.new("Animator")
+            newAnimator.Parent = controller
+            return newAnimator
+        end)
+        if ok then animator = created end
+    end
+    if not animator then return end
+
+    StandPilot.Animator = animator
+    for _, definition in ipairs(STAND_PILOT_ANIMATION_IDS) do
+        local animation = Instance.new("Animation")
+        animation.Name = "MethionPilot_" .. definition.Name
+        animation.AnimationId = definition.Id
+        local ok, track = pcall(function() return animator:LoadAnimation(animation) end)
+        if ok and track then
+            track.Looped = true
+            track.Priority = definition.Priority
+            StandPilot.AnimationTracks[definition.Name] = track
+            StandPilot.AnimationObjects[definition.Name] = animation
+        else
+            pcall(function() animation:Destroy() end)
+        end
+    end
+end
+
+local function updateStandPilotMovementAnimation()
+    if not StandPilot.Enabled then return end
+
+    local character = StandPilot.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local movement = humanoid and humanoid.MoveDirection or Vector3.zero
+    local characterIsMoving = movement.Magnitude > 0.05
+
+    local sprinting = character and character:GetAttribute("Sprinting") == true
+    local shiftDown = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift)
+        or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+    local slowWalkDown = UserInputService:IsKeyDown(Enum.KeyCode.LeftControl)
+        or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)
+
+    local stateName = "Idle"
+    if characterIsMoving then
+        if sprinting or shiftDown then
+            stateName = "Run"
+        elseif slowWalkDown or StandPilot.WalkSpeed <= 8 then
+            stateName = "SlowWalk"
+        else
+            stateName = "Walk"
+        end
+    end
+
+    applyStandPilotSpeed(stateName)
+
+    -- These two tracks were observed beginning together in the collector.
+    -- Keep both active only while idle, rather than stopping the second one as an unrelated track.
+    if stateName == "Idle" then
+        for name, track in pairs(StandPilot.AnimationTracks or {}) do
+            if track and name ~= "Idle" and name ~= "IdleSecondary" then
+                pcall(function() track:Stop(0.15) end)
+            end
+        end
+
+        for _, name in ipairs({"Idle", "IdleSecondary"}) do
+            local idleTrack = StandPilot.AnimationTracks[name]
+            if idleTrack then
+                pcall(function()
+                    idleTrack:AdjustSpeed(1)
+                    if not idleTrack.IsPlaying then
+                        idleTrack:Play(0.18, 1, 1)
+                    end
+                end)
+            end
+        end
+
+        StandPilot.ActiveMovementAnimation = "Idle"
+        return
+    end
+
+    local selected = StandPilot.AnimationTracks[stateName]
+    local playbackRate = standPilotAnimationRate(stateName)
+
+    if StandPilot.ActiveMovementAnimation == stateName then
+        if selected then pcall(function() selected:AdjustSpeed(playbackRate) end) end
+        return
+    end
+
+    for _, track in pairs(StandPilot.AnimationTracks or {}) do
+        if track then pcall(function() track:Stop(0.15) end) end
+    end
+
+    if selected then
+        pcall(function()
+            selected:Play(0.15, 1, playbackRate)
+        end)
+        StandPilot.ActiveMovementAnimation = stateName
+    else
+        StandPilot.ActiveMovementAnimation = nil
+    end
+end
+
+local function setPilotCollisionGroup(object)
+    if not object or not object.Parent then return end
+    if object:IsA("BasePart") or object:IsA("UnionOperation") then
+        pcall(function()
+            if StandPilot.CollisionGroups[object] == nil then
+                StandPilot.CollisionGroups[object] = object.CollisionGroup
+            end
+            PhysicsService:SetPartCollisionGroup(object, "Players")
+        end)
+    end
+end
+
+local function stopStandPilot()
+    local wasActive = StandPilot.Enabled
+    StandPilot.Enabled = false
+
+    local controllerToRestore = StandPilot.Controller
+    if controllerToRestore and controllerToRestore.Parent then
+        if StandPilot.OriginalWalkSpeed ~= nil then
+            pcall(function() controllerToRestore.WalkSpeed = StandPilot.OriginalWalkSpeed end)
+        end
+        if controllerToRestore:IsA("Humanoid") and StandPilot.OriginalHipHeight ~= nil then
+            pcall(function() controllerToRestore.HipHeight = StandPilot.OriginalHipHeight end)
+        end
+    end
+
+    clearStandPilotAnimations()
+    for _, connection in pairs(StandPilot.Connections or {}) do
+        if connection then pcall(function() connection:Disconnect() end) end
+    end
+    StandPilot.Connections = {}
+
+    for part, canCollide in pairs(StandPilot.Collision or {}) do
+        if part and part.Parent then pcall(function() part.CanCollide = canCollide end) end
+    end
+    StandPilot.Collision = {}
+
+    for part, collisionGroup in pairs(StandPilot.CollisionGroups or {}) do
+        if part and part.Parent and type(collisionGroup) == "string" then
+            pcall(function() part.CollisionGroup = collisionGroup end)
+        end
+    end
+    StandPilot.CollisionGroups = {}
+
+    for constraint, wasEnabled in pairs(StandPilot.AlignStates or {}) do
+        if constraint and constraint.Parent then pcall(function() constraint.Enabled = wasEnabled end) end
+    end
+    StandPilot.AlignStates = {}
+
+    local character = StandPilot.Character
+    local stand = StandPilot.Stand
+    local characterRoot = character and character:FindFirstChild("HumanoidRootPart")
+    local standRoot = stand and stand:FindFirstChild("HumanoidRootPart")
+    if characterRoot and standRoot then
+        pcall(function()
+            characterRoot.CFrame = standRoot.CFrame
+            characterRoot.AssemblyLinearVelocity = Vector3.zero
+            characterRoot.AssemblyAngularVelocity = Vector3.zero
+        end)
+    end
+
+    if StandPilot.FocusCam then pcall(function() StandPilot.FocusCam:Destroy() end) end
+    StandPilot.FocusCam = nil
+
+    local locations = workspace:FindFirstChild("Locations")
+    local storage = ReplicatedStorage:FindFirstChild("TempStoragePilot")
+    if storage then
+        if locations then
+            for _, object in ipairs(storage:GetChildren()) do
+                if object.Name == "Naples' Sewers" then pcall(function() object.Parent = locations end) end
+            end
+        end
+        pcall(function() storage:Destroy() end)
+    end
+
+    if stand and stand.Parent and character then
+        local remoteFunction = getCharacterRemoteFunction(character)
+        if remoteFunction then pcall(function() remoteFunction:InvokeServer("ToggleStand", "Toggle") end) end
+    end
+
+    StandPilot.Character = nil
+    StandPilot.Stand = nil
+    StandPilot.Controller = nil
+    StandPilot.OriginalWalkSpeed = nil
+    StandPilot.OriginalHipHeight = nil
+    StandPilot.ActiveSpeedMode = nil
+    if wasActive then miscNotify("Stand Pilot", "Stand Pilot disabled.", "Info") end
+end
+StandPilot.Cleanup = stopStandPilot
+
+local function setStandPilot(enabled)
+    if not enabled then
+        stopStandPilot()
+        return
+    end
+    if StandPilot.Enabled then return end
+
+    local character = LP.Character or LP.CharacterAdded:Wait()
+    local characterRoot = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local remoteFunction = getCharacterRemoteFunction(character)
+    if not characterRoot or not humanoid or not remoteFunction then
+        miscNotify("Stand Pilot", "Character is not ready yet.", "Warning")
+        return
+    end
+
+    local stand = character:FindFirstChild("StandMorph")
+    if not stand then
+        pcall(function() remoteFunction:InvokeServer("ToggleStand", "Toggle") end)
+        local deadline = tick() + 5
+        repeat
+            task.wait(0.1)
+            stand = character:FindFirstChild("StandMorph")
+        until stand or tick() >= deadline or LP.Character ~= character
+    end
+    if not stand then
+        miscNotify("Stand Pilot", "Could not summon your stand.", "Warning")
+        return
+    end
+
+    local controller = resolveStandController(stand)
+    local standRoot = stand:FindFirstChild("HumanoidRootPart") or stand:WaitForChild("HumanoidRootPart", 3)
+    if not controller or not standRoot then
+        miscNotify("Stand Pilot", "Stand is not fully loaded.", "Warning")
+        return
+    end
+
+    StandPilot.Character = character
+    StandPilot.Stand = stand
+    StandPilot.Controller = controller
+    StandPilot.Connections = {}
+    StandPilot.Collision = {}
+    StandPilot.CollisionGroups = {}
+    StandPilot.AlignStates = {}
+    prepareStandPilotController(controller)
+    bindStandPilotAnimations(stand, controller)
+
+    pcall(function()
+        local oldFocus = character:FindFirstChild("FocusCam")
+        if oldFocus then oldFocus:Destroy() end
+        local focus = Instance.new("ObjectValue")
+        focus.Name = "FocusCam"
+        focus.Value = controller
+        focus.Parent = stand.Parent or character
+        StandPilot.FocusCam = focus
+    end)
+
+    pcall(function()
+        local oldStorage = ReplicatedStorage:FindFirstChild("TempStoragePilot")
+        if oldStorage then oldStorage:Destroy() end
+        local storage = Instance.new("Folder")
+        storage.Name = "TempStoragePilot"
+        storage.Parent = ReplicatedStorage
+        local locations = workspace:FindFirstChild("Locations")
+        local sewers = locations and locations:FindFirstChild("Naples' Sewers")
+        if sewers then sewers.Parent = storage end
+    end)
+
+    local primary = stand.PrimaryPart or standRoot
+    local standAttach = primary and primary:FindFirstChild("StandAttach")
+    if standAttach then
+        for _, name in ipairs({"AlignOrientation", "AlignPosition"}) do
+            local constraint = standAttach:FindFirstChild(name)
+            if constraint then
+                StandPilot.AlignStates[constraint] = constraint.Enabled
+                pcall(function() constraint.Enabled = false end)
+            end
+        end
+    end
+
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            StandPilot.Collision[part] = part.CanCollide
+            pcall(function() part.CanCollide = false end)
+        end
+    end
+
+    StandPilot.Enabled = true
+    table.insert(StandPilot.Connections, UserInputService.JumpRequest:Connect(function()
+        if not StandPilot.Enabled or not StandPilot.Controller then return end
+        pcall(function() StandPilot.Controller.Jump = true end)
+    end))
+
+    table.insert(StandPilot.Connections, character.DescendantAdded:Connect(function(object)
+        if not StandPilot.Enabled or not object:IsA("BasePart") then return end
+        if StandPilot.Collision[object] == nil then StandPilot.Collision[object] = object.CanCollide end
+        pcall(function() object.CanCollide = false end)
+        setPilotCollisionGroup(object)
+    end))
+
+    local nextSummonAttempt = 0
+    table.insert(StandPilot.Connections, RunService.Heartbeat:Connect(function()
+        if not StandPilot.Enabled then return end
+        if LP.Character ~= character or not character.Parent then
+            stopStandPilot()
+            return
+        end
+        if not stand or not stand.Parent then
+            local currentStand = getStandMorph()
+            if currentStand then
+                stand = currentStand
+                StandPilot.Stand = currentStand
+                standRoot = currentStand:FindFirstChild("HumanoidRootPart")
+                controller = resolveStandController(currentStand)
+                StandPilot.Controller = controller
+                prepareStandPilotController(controller)
+                bindStandPilotAnimations(currentStand, controller)
+            else
+                if tick() >= nextSummonAttempt then
+                    nextSummonAttempt = tick() + 1
+                    pcall(function() remoteFunction:InvokeServer("ToggleStand", "Toggle") end)
+                end
+                return
+            end
+        end
+
+        local camera = workspace.CurrentCamera
+        if camera and controller and type(controller.Move) == "function" then
+            local moveDirection = camera.CFrame:VectorToObjectSpace(humanoid.MoveDirection)
+            pcall(function() controller:Move(moveDirection, true) end)
+        end
+
+        updateStandPilotMovementAnimation()
+
+        if standRoot and standRoot.Parent and characterRoot and characterRoot.Parent then
+            pcall(function()
+                characterRoot.CFrame = standRoot.CFrame - Vector3.new(0, 35, 0)
+                characterRoot.AssemblyLinearVelocity = Vector3.zero
+                characterRoot.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
+    end))
+
+    pcall(function()
+        for _, object in ipairs((stand.Parent or stand):GetDescendants()) do setPilotCollisionGroup(object) end
+    end)
+    miscNotify("Stand Pilot", "Stand Pilot enabled.", "Success")
+end
+
+StandPilotSection:Button({
+    Title = "Toggle Stand",
+    Desc = "Summon or desummon your current stand.",
+    Icon = "user-round",
+    Callback = function()
+        task.spawn(function()
+            local ok, err = pcall(function()
+                local character = LP.Character or LP.CharacterAdded:Wait()
+                local remoteFunction = getCharacterRemoteFunction(character)
+                if not remoteFunction then error("RemoteFunction is not ready") end
+                remoteFunction:InvokeServer("ToggleStand", "Toggle")
+            end)
+            if ok then
+                miscNotify("Toggle Stand", "Stand toggle requested.", "Success")
+            else
+                miscNotify("Toggle Stand", tostring(err), "Warning")
+            end
+        end)
+    end,
+})
+StandPilotSection:Toggle({
+    Title = "Stand Pilot",
+    Desc = "Control the stand with your movement input while your character follows below it.",
+    Icon = "user-round-cog",
+    Value = false,
+    Callback = function(enabled)
+        task.spawn(function()
+            local ok, err = pcall(function() setStandPilot(enabled) end)
+            if not ok then
+                pcall(stopStandPilot)
+                miscNotify("Stand Pilot", "Could not change Stand Pilot: " .. tostring(err), "Warning")
+            end
+        end)
+    end,
+})
+StandPilotSection:Slider({
+    Title = "Walk Speed",
+    Desc = "Speed used while walking (1-100).",
+    Icon = "footprints",
+    Value = {Min = 1, Max = 100, Default = 16},
+    Step = 1,
+    Callback = function(value)
+        StandPilot.WalkSpeed = math.clamp(tonumber(value) or 16, 1, 100)
+    end,
+})
+StandPilotSection:Slider({
+    Title = "Run Speed",
+    Desc = "Speed used while sprinting or holding Shift (1-150).",
+    Icon = "gauge",
+    Value = {Min = 1, Max = 150, Default = 44},
+    Step = 1,
+    Callback = function(value)
+        StandPilot.RunSpeed = math.clamp(tonumber(value) or 44, 1, 150)
+    end,
+})
+StandPilotSection:Toggle({
+    Title = "Inf Pilot Range",
+    Desc = "Keep the stand's pilot range value extended while enabled.",
+    Icon = "scan",
+    Value = false,
+    Callback = function(enabled)
+        StandPilot.InfiniteRangeEnabled = enabled == true
+        if StandPilot.InfiniteRangeConnection then
+            pcall(function() StandPilot.InfiniteRangeConnection:Disconnect() end)
+            StandPilot.InfiniteRangeConnection = nil
+        end
+        if StandPilot.InfiniteRangeEnabled then
+            StandPilot.InfiniteRangeConnection = RunService.Heartbeat:Connect(function()
+                pcall(function()
+                    local stand = getStandMorph()
+                    local isPiloting = stand and stand:FindFirstChild("IsPiloting")
+                    if isPiloting then isPiloting.Value = 999999 end
+                end)
+            end)
+            miscNotify("Pilot", "Infinite Pilot Range enabled.", "Success")
+        else
+            miscNotify("Pilot", "Infinite Pilot Range disabled.", "Info")
+        end
+    end,
+})
+
+if _G.MethionMiscCharacterAddedConnection then
+    pcall(function() _G.MethionMiscCharacterAddedConnection:Disconnect() end)
+end
+_G.MethionMiscCharacterAddedConnection = LP.CharacterAdded:Connect(function()
+    task.delay(1, function()
+        if StandPilot.Enabled then stopStandPilot() end
+    end)
+end)
+
+end
+
+local TrollingTab = Window:Tab({Title = "Trolling", Icon = "target", Desc = "Target selection and stand-specific tools."})
+_G.__MethionTrollingSections = _G.__MethionTrollingSections or {}
+_G.__MethionTrollingSections.Targets = TrollingTab:Section({Title = "Target Selection", Side = "left"})
+_G.__MethionTrollingSections.Sticky = TrollingTab:Section({Title = "Sticky Fingers Pull", Side = "left"})
+_G.__MethionTrollingSections.Kidnap = TrollingTab:Section({Title = "Mr. President Kidnapper", Side = "right"})
+local TrollTargetsSection = _G.__MethionTrollingSections.Targets
+local TrollStickySection = _G.__MethionTrollingSections.Sticky
+local TrollKidnapSection = _G.__MethionTrollingSections.Kidnap
+
+TrollTargetsSection:Paragraph({
+    Title = "Choose Targets",
+    Desc = "Select one or more players for Sticky Fingers Pull and Mr. President Kidnapper.",
 })
 
 local function buildPlayerList()
@@ -5856,64 +6608,396 @@ local function buildPlayerList()
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LP then table.insert(list, plr.Name) end
     end
+    table.sort(list, function(a, b)
+        if a == "--" then return true end
+        if b == "--" then return false end
+        return string.lower(a) < string.lower(b)
+    end)
     return list
 end
 
 local trollSelection = {"--"}
 local trollDropdown = nil
-
 local function rebuildTrollDropdown()
     local list = buildPlayerList()
     local valid = {}
-    for _, n in ipairs(list) do valid[n] = true end
-
+    for _, name in ipairs(list) do valid[name] = true end
     local current = {}
-    for _, n in ipairs(trollSelection) do
-        if valid[n] then table.insert(current, n) end
+    for _, name in ipairs(trollSelection) do
+        if valid[name] then table.insert(current, name) end
     end
     if #current == 0 then current = {"--"} end
     trollSelection = current
-
     local real = {}
-    for _, n in ipairs(current) do
-        if n ~= "--" then table.insert(real, n) end
+    for _, name in ipairs(current) do
+        if name ~= "--" then table.insert(real, name) end
     end
     Config.Trolling.TargetPlayers = real
 
     if trollDropdown then
-        pcall(function()
-            trollDropdown:Refresh(list, true)
-        end)
+        pcall(function() trollDropdown:Refresh(list, true) end)
         return
     end
-
-    trollDropdown = TrollingTab:Dropdown({
+    trollDropdown = TrollTargetsSection:Dropdown({
         Title = "Target Players",
-        Desc = "Select players to pull",
+        Desc = "Select multiple players to target.",
         Icon = "users",
         Values = list,
         Value = current,
         Multi = true,
         Callback = function(selected)
-            selected = selected or {}
-            trollSelection = selected
-            local selectedPlayers = {}
-            for _, n in ipairs(selected) do
-                if n ~= "--" then table.insert(selectedPlayers, n) end
+            if type(selected) ~= "table" then
+                selected = selected and {selected} or {}
             end
-            Config.Trolling.TargetPlayers = selectedPlayers
+            trollSelection = selected
+            local names = {}
+            for _, name in ipairs(selected) do
+                if name ~= "--" then table.insert(names, name) end
+            end
+            Config.Trolling.TargetPlayers = names
         end,
     })
 end
 
+TrollTargetsSection:Button({
+    Title = "Select All Players",
+    Desc = "Select every other player currently in the server.",
+    Icon = "users-round",
+    Callback = function()
+        local names = {}
+        for _, playerName in ipairs(buildPlayerList()) do
+            if playerName ~= "--" then table.insert(names, playerName) end
+        end
+        trollSelection = names
+        Config.Trolling.TargetPlayers = names
+        if trollDropdown then pcall(function() trollDropdown:Set(names) end) end
+        AirflowCompat:Notify({Title = "Trolling", Content = #names > 0 and ("Selected " .. #names .. " player(s).") or "There are no other players in this server.", Type = #names > 0 and "Success" or "Warning"})
+    end,
+})
+TrollTargetsSection:Button({
+    Title = "Refresh Player List",
+    Desc = "Update available targets after players join or leave.",
+    Icon = "refresh-cw",
+    Callback = function()
+        rebuildTrollDropdown()
+        AirflowCompat:Notify({Title = "Trolling", Content = "Target list refreshed.", Type = "Success"})
+    end,
+})
 rebuildTrollDropdown()
 
-Players.PlayerAdded:Connect(function()
-    task.delay(0.5, rebuildTrollDropdown)
-end)
+local function notifyTroll(title, content, kind)
+    AirflowCompat:Notify({Title = title, Content = content, Type = kind or "Info", Duration = 4})
+end
 
+local function currentStandName()
+    local stats = LP:FindFirstChild("PlayerStats")
+    local stand = stats and stats:FindFirstChild("Stand")
+    return stand and tostring(stand.Value) or ""
+end
+
+local stickyPullEnabled = false
+local stickyPullConnection = nil
+local stickyPullToggle = nil
+_G.__MethionStickyFingersActive = false
+TrollStickySection:Paragraph({
+    Title = "Sticky Fingers Pull",
+    Desc = "Keep selected targets in front of you while using Sticky Fingers. Requires Sticky Fingers equipped.",
+})
+stickyPullToggle = TrollStickySection:Toggle({
+    Title = "Enable Sticky Fingers Pull",
+    Desc = "Continuously bring selected targets close in front of your character.",
+    Icon = "move-3d",
+    Value = false,
+    Callback = function(state)
+        if state and currentStandName() ~= "Sticky Fingers" then
+            stickyPullEnabled = false
+            _G.__MethionStickyFingersActive = false
+            if stickyPullToggle then pcall(function() stickyPullToggle:Set(false) end) end
+            notifyTroll("Sticky Fingers", "Equip Sticky Fingers before enabling this feature.", "Warning")
+            return
+        end
+        stickyPullEnabled = state == true
+        _G.__MethionStickyFingersActive = stickyPullEnabled
+        if stickyPullConnection then
+            pcall(function() stickyPullConnection:Disconnect() end)
+            stickyPullConnection = nil
+        end
+        if stickyPullEnabled then
+            stickyPullConnection = RunService.Heartbeat:Connect(function()
+                if not stickyPullEnabled or currentStandName() ~= "Sticky Fingers" then return end
+                local character = LP.Character
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                if not root then return end
+                for _, targetName in ipairs(Config.Trolling.TargetPlayers or {}) do
+                    local target = Players:FindFirstChild(targetName)
+                    local targetCharacter = target and target.Character
+                    local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+                    local targetHumanoid = targetCharacter and targetCharacter:FindFirstChildOfClass("Humanoid")
+                    if targetRoot and targetHumanoid and targetHumanoid.Health > 0 then
+                        pcall(function() targetRoot.CFrame = root.CFrame * CFrame.new(0, 0, -5) end)
+                    end
+                end
+            end)
+            notifyTroll("Sticky Fingers", "Pull enabled. Use your Sticky Fingers moveset.", "Success")
+        else
+            notifyTroll("Sticky Fingers", "Pull disabled.", "Info")
+        end
+    end,
+})
+
+TrollKidnapSection:Paragraph({
+    Title = "Mr. President",
+    Desc = "Attempts the Kidnap action on a selected target. Requires Mr. President and an available Kidnap move.",
+})
+local kidnapTargetName = "--"
+local kidnapManualName = ""
+local kidnapShuffle = false
+local kidnapEnabled = false
+local kidnapLoopToken = 0
+local kidnapToggle = nil
+local kidnapCleanup = nil
+local kidnapDropdown = nil
+local kidnapCollisionCache = {}
+
+local function restoreKidnapCollision()
+    for part, canCollide in pairs(kidnapCollisionCache) do
+        if part and part.Parent then
+            pcall(function() part.CanCollide = canCollide end)
+        end
+        kidnapCollisionCache[part] = nil
+    end
+end
+
+local function applyKidnapNoclip(character)
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            if kidnapCollisionCache[part] == nil then kidnapCollisionCache[part] = part.CanCollide end
+            part.CanCollide = false
+        end
+    end
+end
+
+local function kidnapTeleportUp(root)
+    if not root or not root.Parent then return end
+    local fallenY = workspace.FallenPartsDestroyHeight
+    local position = root.Position
+    if position.Y < fallenY + 100 then
+        root.Position = Vector3.new(position.X, fallenY + 180, position.Z)
+    end
+    root.Anchored = true
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    local pad = Instance.new("Part")
+    pad.Name = "MethionKidnapRecoveryPad"
+    pad.Anchored = true
+    pad.CanCollide = true
+    pad.Size = Vector3.new(150, 1, 150)
+    pad.Transparency = 1
+    pad.CFrame = root.CFrame * CFrame.new(0, 200, 0)
+    pad.Parent = workspace
+    root.CFrame = pad.CFrame * CFrame.new(0, 6, 0)
+    root.Anchored = false
+    task.delay(15, function()
+        if pad and pad.Parent then pcall(function() pad:Destroy() end) end
+    end)
+end
+
+local function kidnapCooldownActive()
+    local playerGui = LP:FindFirstChildOfClass("PlayerGui") or LP:FindFirstChild("PlayerGui")
+    local hud = playerGui and playerGui:FindFirstChild("HUD")
+    local cooldowns = hud and hud:FindFirstChild("Cooldowns")
+    if not cooldowns then return false end
+    local frame = cooldowns:FindFirstChild("Kidnap") or cooldowns:FindFirstChild("KIDNAP")
+    return frame ~= nil and frame:IsA("Frame") and frame.Visible == true
+end
+
+local function getKidnapTarget()
+    if kidnapManualName ~= "" then
+        local query = string.lower(kidnapManualName)
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LP and string.sub(string.lower(player.Name), 1, #query) == query then
+                return player
+            end
+        end
+        return nil
+    end
+    if kidnapShuffle then
+        local candidates = {}
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LP then table.insert(candidates, player) end
+        end
+        return #candidates > 0 and candidates[math.random(1, #candidates)] or nil
+    end
+    return kidnapTargetName ~= "--" and Players:FindFirstChild(kidnapTargetName) or nil
+end
+
+local function performKidnap(target, token)
+    if not target or target == LP or not target.Character then return end
+    local character = LP.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local remote = character and character:FindFirstChild("RemoteEvent")
+    if not root or not remote then return end
+
+    if not getStandMorph() then
+        local remoteFunction = character:FindFirstChild("RemoteFunction")
+        if remoteFunction then
+            pcall(function() remoteFunction:InvokeServer("ToggleStand", "Toggle") end)
+            local deadline = os.clock() + 2
+            while os.clock() < deadline and kidnapEnabled and kidnapLoopToken == token and not getStandMorph() do
+                task.wait(0.1)
+            end
+        end
+        if not getStandMorph() then
+            notifyTroll("Mr. President", "The stand could not be summoned.", "Warning")
+            return
+        end
+    end
+    if not kidnapEnabled or kidnapLoopToken ~= token or kidnapCooldownActive() then return end
+
+    local targetRoot = target.Character and target.Character:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return end
+    local originalAnchored = root.Anchored
+    local raisedAfterKidnap = false
+    local cleaned = false
+    local function cleanup()
+        if cleaned then return end
+        cleaned = true
+        if raisedAfterKidnap and root and root.Parent then
+            pcall(kidnapTeleportUp, root)
+        elseif root and root.Parent then
+            pcall(function() root.Anchored = originalAnchored end)
+        end
+        restoreKidnapCollision()
+        if kidnapCleanup then kidnapCleanup = nil end
+    end
+    kidnapCleanup = cleanup
+
+    local ok, err = pcall(function()
+        local pos = (targetRoot.CFrame * CFrame.new(0, 0, -1)).Position
+        root.CFrame = CFrame.lookAt(pos, targetRoot.Position)
+        task.wait(0.05)
+        if not kidnapEnabled or kidnapLoopToken ~= token then return end
+
+        root.Anchored = true
+        remote:FireServer("InputBegan", {Input = Enum.KeyCode.E})
+        local start = os.clock()
+        while os.clock() - start < 0.8 do
+            if not kidnapEnabled or kidnapLoopToken ~= token then break end
+            if targetRoot and targetRoot.Parent then
+                pcall(function()
+                    local followPos = (targetRoot.CFrame * CFrame.new(0, 0, -1)).Position
+                    root.CFrame = CFrame.lookAt(followPos, targetRoot.Position)
+                end)
+            end
+            task.wait()
+        end
+        pcall(function() remote:FireServer("InputEnded", {Input = Enum.KeyCode.E}) end)
+        if not kidnapEnabled or kidnapLoopToken ~= token then return end
+        task.wait(0.2)
+        applyKidnapNoclip(character)
+        root.CFrame = CFrame.new(-480.5379943847656, -135.09373474121094, -2050.510986328125)
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        raisedAfterKidnap = true
+        remote:FireServer("InputBegan", {Input = Enum.KeyCode.Z})
+        task.wait(0.1)
+        pcall(function() remote:FireServer("InputEnded", {Input = Enum.KeyCode.Z}) end)
+        task.wait(1.5)
+    end)
+    cleanup()
+    if not ok then notifyTroll("Mr. President", "Kidnap action failed: " .. tostring(err), "Warning") end
+end
+
+kidnapDropdown = TrollKidnapSection:Dropdown({
+    Title = "Select Player to Kidnap",
+    Desc = "Used unless Shuffle or Manual Target is enabled.",
+    Values = buildPlayerList(),
+    Value = kidnapTargetName,
+    Callback = function(name) kidnapTargetName = tostring(name or "--") end,
+})
+TrollKidnapSection:Button({
+    Title = "Refresh Kidnap Targets",
+    Desc = "Update the target list and clear the current selection.",
+    Icon = "refresh-cw",
+    Callback = function()
+        pcall(function() kidnapDropdown:Refresh(buildPlayerList(), false) end)
+        kidnapTargetName = "--"
+        pcall(function() kidnapDropdown:Set("--") end)
+        notifyTroll("Mr. President", "Kidnap target list refreshed.", "Success")
+    end,
+})
+TrollKidnapSection:Toggle({
+    Title = "Shuffle Random Target",
+    Desc = "Choose a random other player each time the move is available.",
+    Icon = "shuffle",
+    Value = false,
+    Callback = function(state) kidnapShuffle = state == true end,
+})
+TrollKidnapSection:Input({
+    Title = "Manual Target Name",
+    Desc = "Optional username prefix. Takes priority over the dropdown and shuffle.",
+    Icon = "search",
+    Value = "",
+    Placeholder = "Enter username or prefix",
+    Callback = function(value) kidnapManualName = tostring(value or "") end,
+})
+kidnapToggle = TrollKidnapSection:Toggle({
+    Title = "Enable Mr. President Kidnapper",
+    Desc = "Checks the Kidnap cooldown and attempts the move about every 14 seconds.",
+    Icon = "package",
+    Value = false,
+    Callback = function(state)
+        if state and currentStandName() ~= "Mr. President" then
+            kidnapEnabled = false
+            if kidnapToggle then pcall(function() kidnapToggle:Set(false) end) end
+            notifyTroll("Mr. President", "Equip Mr. President before enabling this feature.", "Warning")
+            return
+        end
+        kidnapEnabled = state == true
+        kidnapLoopToken += 1
+        local token = kidnapLoopToken
+        if not kidnapEnabled then
+            if kidnapCleanup then pcall(kidnapCleanup) end
+            restoreKidnapCollision()
+            local character = LP.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if root then pcall(function() root.Anchored = false end) end
+            notifyTroll("Mr. President", "Kidnapper disabled.", "Info")
+            return
+        end
+        notifyTroll("Mr. President", "Kidnapper enabled.", "Success")
+        task.spawn(function()
+            local lastAction = 0
+            while kidnapEnabled and kidnapLoopToken == token do
+                task.wait(0.1)
+                if os.clock() - lastAction >= 14 and not kidnapCooldownActive() then
+                    local target = getKidnapTarget()
+                    if target and target.Character then
+                        lastAction = os.clock()
+                        performKidnap(target, token)
+                    end
+                end
+            end
+        end)
+    end,
+})
+
+Players.PlayerAdded:Connect(function()
+    task.delay(0.5, function()
+        rebuildTrollDropdown()
+        pcall(function() kidnapDropdown:Refresh(buildPlayerList(), true) end)
+    end)
+end)
 Players.PlayerRemoving:Connect(function()
-    task.defer(rebuildTrollDropdown)
+    task.defer(function()
+        rebuildTrollDropdown()
+        local list = buildPlayerList()
+        pcall(function() kidnapDropdown:Refresh(list, true) end)
+        if kidnapTargetName ~= "--" and not table.find(list, kidnapTargetName) then
+            kidnapTargetName = "--"
+            pcall(function() kidnapDropdown:Set("--") end)
+        end
+    end)
 end)
 
 local TeleportsTab = Window:Tab({Title = "Teleports", Icon = "map-pin", Desc = "Landmarks, custom coordinates, and player travel."})
@@ -6064,60 +7148,303 @@ for _, name in ipairs(Config.Teleport.LocationNames) do
     })
 end
 
-local ShopTab = Window:Tab({Title = "Shop", Icon = "shopping-cart"})
+local ShopTab = Window:Tab({Title = "Shop", Icon = "shopping-cart", Desc = "NPC dialogue, fighting styles, and item purchases."})
+ShopTab:Header("Shop & Trainer Center")
+_G.__MethionShopSections = _G.__MethionShopSections or {}
+_G.__MethionShopSections.Dialogues = ShopTab:Section({Title = "NPCs & Special Dialogue", Side = "left"})
+_G.__MethionShopSections.Styles = ShopTab:Section({Title = "Fighting Styles", Side = "left"})
+_G.__MethionShopSections.Items = ShopTab:Section({Title = "Items & Rare Supplies", Side = "right"})
+_G.__MethionShopSections.Parts = ShopTab:Section({Title = "Saint's Corpse Parts", Side = "right"})
+_G.__MethionShopSections.Consumables = ShopTab:Section({Title = "Food & Miscellaneous", Side = "right"})
+local ShopDialoguesSection = _G.__MethionShopSections.Dialogues
+local ShopStylesSection = _G.__MethionShopSections.Styles
+local ShopItemsSection = _G.__MethionShopSections.Items
+local ShopPartsSection = _G.__MethionShopSections.Parts
+local ShopConsumablesSection = _G.__MethionShopSections.Consumables
+
+local function shopNotify(title, content, kind)
+    AirflowCompat:Notify({Title = title, Content = content, Type = kind or "Info", Duration = 4})
+end
+
+local function shopRemoteEvent()
+    local character = LP.Character or LP.CharacterAdded:Wait()
+    return character and (character:FindFirstChild("RemoteEvent") or character:WaitForChild("RemoteEvent", 5))
+end
 
 local function fireNpc(npcName)
     if State.Selling then
-        AirflowCompat:Notify({Title = "Selling", Content = "Wait until the current sale finishes before opening another dialogue.", Type = "Warning"})
+        shopNotify("Shop", "Wait until the current sale finishes before opening another dialogue.", "Warning")
+        return false
+    end
+    local npc = nil
+    for _, folderName in ipairs({"Dialogue", "NewDialogue"}) do
+        local folder = ReplicatedStorage:FindFirstChild(folderName)
+        if folder then
+            npc = folder:FindFirstChild(npcName)
+            if not npc and npcName == "Jotaro" then
+                npc = folder:FindFirstChild("Jotaro.") or folder:FindFirstChild("Jotaro Kujo")
+            end
+            if npc then break end
+        end
+    end
+    local remote = shopRemoteEvent()
+    if not npc or not remote then
+        shopNotify("Shop", "Could not find dialogue or RemoteEvent for " .. tostring(npcName) .. ".", "Warning")
+        return false
+    end
+    local ok, err = pcall(function() remote:FireServer("PromptTriggered", npc) end)
+    if not ok then shopNotify("Shop", tostring(err), "Warning") end
+    return ok
+end
+
+local function fireDialogueChoice(npcName, dialogueName, optionName)
+    if State.Selling then
+        shopNotify("Shop", "Wait until the current sale finishes before opening another dialogue.", "Warning")
+        return false
+    end
+    local remote = shopRemoteEvent()
+    if not remote then
+        shopNotify("Shop", "Character RemoteEvent is not ready.", "Warning")
+        return false
+    end
+    local ok, err = pcall(function()
+        remote:FireServer("EndDialogue", {
+            NPC = npcName,
+            Dialogue = dialogueName,
+            Option = optionName,
+        })
+    end)
+    if not ok then shopNotify("Shop", tostring(err), "Warning") end
+    return ok
+end
+
+local function shopHasItem(itemName, neededCount)
+    neededCount = tonumber(neededCount) or 1
+    local count = 0
+    local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+    local character = LP.Character
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item.Name == itemName then count += 1 end
+        end
+    end
+    if character then
+        for _, item in ipairs(character:GetChildren()) do
+            if item.Name == itemName then count += 1 end
+        end
+    end
+    return count >= neededCount
+end
+
+local function shopBuyRequest(itemName, price)
+    price = tonumber(price) or 0
+    if Utils.money() < price then
+        shopNotify("Shop", "Need $" .. tostring(price) .. " to buy " .. tostring(itemName) .. ".", "Warning")
         return
     end
-    pcall(function()
-        local char = Utils.character()
-        if not char then return end
-        local ev = char:FindFirstChild("RemoteEvent")
-        if not ev then return end
-        local dg = ReplicatedStorage:FindFirstChild("Dialogue")
-        if not dg then return end
-        local npc = dg:FindFirstChild(npcName)
-        if not npc then return end
-        ev:FireServer("PromptTriggered", npc)
+    local remote = shopRemoteEvent()
+    if not remote then
+        shopNotify("Shop", "Character RemoteEvent is not ready.", "Warning")
+        return
+    end
+    local ok, err = pcall(function()
+        remote:FireServer("PurchaseShopItem", {ItemName = itemName})
     end)
+    if ok then
+        shopNotify("Shop", "Purchase request sent for " .. tostring(itemName) .. ".", "Success")
+    else
+        shopNotify("Shop", "Purchase request failed: " .. tostring(err), "Warning")
+    end
 end
 
-ShopTab:Paragraph({Title = "Fire Dialogue", Desc = "Open dialogue with NPCs"})
-ShopTab:Divider()
-ShopTab:Button({Title = "Vampirism Trainer", Icon = "message-circle", Callback = function() fireNpc("Vampirism Trainer") end})
-ShopTab:Button({Title = "Boxing Trainer", Icon = "message-circle", Callback = function() fireNpc("Boxing Trainer") end})
-ShopTab:Button({Title = "Hamon Trainer", Icon = "message-circle", Callback = function() fireNpc("Hamon Trainer") end})
-ShopTab:Button({Title = "Spin Trainer", Icon = "message-circle", Callback = function() fireNpc("Spin Trainer") end})
-ShopTab:Button({Title = "Sword Style Trainer", Icon = "message-circle", Callback = function() fireNpc("Sword Style Trainer") end})
-ShopTab:Button({Title = "Merchant", Icon = "message-circle", Callback = function() fireNpc("Merchant") end})
-
-ShopTab:Divider()
-ShopTab:Paragraph({Title = "Shop Purchase", Desc = "Buy items from the shop"})
-
-local shopItems = {
-    {"Buy 1x Lucky Arrow", 75000},
-    {"Buy 1x Mysterious Arrow", 750},
-    {"Buy 1x Rokakaka", 2500},
-    {"Buy 1x Pure Rokakaka", 4000},
-    {"Buy 1x DIO's Diary", 20000},
-    {"Buy 1x Rib Cage of the Saint's Corpse", 3500},
-    {"Buy 1x Left Arm of the Saint's Corpse", 15000},
-    {"Buy 1x Heart of the Saint's Corpse", 45000},
-    {"Buy 1x Pelvis of the Saint's Corpse", 45000},
-}
-
-for _, entry in ipairs(shopItems) do
-    local title, price = entry[1], entry[2]
-    local itemName = title:gsub("^Buy ", "")
-    ShopTab:Button({
+local function addShopButton(section, title, description, iconName, callback)
+    section:Button({
         Title = title,
-        Desc = "Price: " .. price,
-        Icon = "shopping-cart",
-        Callback = function() Shop.buy(itemName) end,
+        Desc = description or "",
+        Icon = iconName or "shopping-cart",
+        Callback = callback,
     })
 end
+
+ShopDialoguesSection:Paragraph({
+    Title = "Trainer Dialogues",
+    Desc = "Open NPC dialogue directly. Some trainers require additional items, money, or a manual dialogue choice.",
+})
+for _, entry in ipairs({
+    {"Vampirism Trainer", "Vampirism Trainer"},
+    {"Boxing Trainer", "Boxing Trainer"},
+    {"Hamon Trainer", "Hamon Trainer"},
+    {"Spin Trainer", "Spin Trainer"},
+    {"Sword Style Trainer", "Sword Style Trainer"},
+    {"Merchant", "Merchant"},
+}) do
+    local label, npcName = entry[1], entry[2]
+    addShopButton(ShopDialoguesSection, label, "Open dialogue with " .. npcName .. ".", "message-circle", function()
+        if fireNpc(npcName) then shopNotify("Shop", npcName .. " dialogue triggered.", "Success") end
+    end)
+end
+ShopDialoguesSection:Divider()
+addShopButton(ShopDialoguesSection, "Trigger Jesus Dialogue", "Open the Jesus dialogue prompt.", "message-circle", function()
+    if fireNpc("Jesus") then shopNotify("Shop", "Jesus dialogue triggered.", "Success") end
+end)
+addShopButton(ShopDialoguesSection, "Open Jotaro Dialogue", "Trigger Jotaro's dialogue prompt.", "message-circle", function()
+    if fireNpc("Jotaro") then shopNotify("Shop", "Jotaro dialogue triggered.", "Info") end
+end)
+addShopButton(ShopDialoguesSection, "Skip Jotaro Dialogue", "Attempts to advance visible dialogue options for a short period.", "fast-forward", function()
+    if not fireNpc("Jotaro") then return end
+    task.spawn(function()
+        for _ = 1, 40 do
+            local dialogue = Gui.currentDialogue()
+            if dialogue then
+                if Gui.hasVisibleOptions(dialogue) then
+                    local option = Gui.option(dialogue, "Option1")
+                    if option and Gui.isVisible(option) then Gui.click(option) end
+                else
+                    Gui.skipClick()
+                end
+            end
+            task.wait(0.1)
+        end
+        shopNotify("Shop", "Jotaro dialogue skip sequence finished.", "Info")
+    end)
+end)
+addShopButton(ShopDialoguesSection, "Open Halloween Event Shop", "Trigger the Halloween Event dialogue if available.", "store", function()
+    if fireNpc("Halloween Event") then shopNotify("Shop", "Halloween Event dialogue triggered.", "Success") end
+end)
+
+ShopStylesSection:Paragraph({
+    Title = "Fighting Style Purchases",
+    Desc = "Checks your money and prerequisite items before sending the purchase dialogue.",
+})
+addShopButton(ShopStylesSection, "Reset Fighting Style", "Requires 3 Diamonds and $5,000.", "refresh-cw", function()
+    if not shopHasItem("Diamond", 3) or Utils.money() < 5000 then
+        shopNotify("Shop", "Reset requires 3 Diamonds and $5,000.", "Warning")
+        return
+    end
+    local remote = shopRemoteEvent()
+    if remote then
+        local ok = pcall(function()
+            remote:FireServer("EndDialogue", {NPC = "Matt", Option = "Option1", Dialogue = "Dialogue5"})
+        end)
+        shopNotify("Shop", ok and "Fighting style reset request sent." or "Could not request the fighting style reset.", ok and "Success" or "Warning")
+    end
+end)
+addShopButton(ShopStylesSection, "Buy Boxing", "Requires Quinton's Glove and $10,000.", "hand", function()
+    if not shopHasItem("Quinton's Glove") or Utils.money() < 10000 then
+        shopNotify("Shop", "Boxing requires Quinton's Glove and $10,000.", "Warning")
+        return
+    end
+    if fireDialogueChoice("Quinton", "Dialogue5", "Option1") then shopNotify("Shop", "Boxing purchase request sent.", "Success") end
+end)
+addShopButton(ShopStylesSection, "Buy Boxing Gloves", "Costs $1,000 and requires Boxing Style.", "hand", function()
+    if Utils.money() < 1000 then
+        shopNotify("Shop", "Boxing Gloves cost $1,000.", "Warning")
+        return
+    end
+    if fireDialogueChoice("Boxing Gloves", "Dialogue1", "Option1") then shopNotify("Shop", "Boxing Gloves request sent.", "Success") end
+end)
+addShopButton(ShopStylesSection, "Buy Sword Style", "Requires Ancient Scroll and $10,000.", "swords", function()
+    if not shopHasItem("Ancient Scroll") or Utils.money() < 10000 then
+        shopNotify("Shop", "Sword Style requires an Ancient Scroll and $10,000.", "Warning")
+        return
+    end
+    if fireDialogueChoice("Uzurashi", "Dialogue5", "Option1") then shopNotify("Shop", "Sword Style purchase request sent.", "Success") end
+end)
+addShopButton(ShopStylesSection, "Buy Pluck", "Requires Sword Style.", "swords", function()
+    local spec = LP:FindFirstChild("PlayerStats") and LP.PlayerStats:FindFirstChild("Spec")
+    if not spec or spec.Value ~= "SwordStyle" then
+        shopNotify("Shop", "Pluck requires Sword Style first.", "Warning")
+        return
+    end
+    if fireDialogueChoice("Pluck", "Dialogue1", "Option1") then shopNotify("Shop", "Pluck purchase request sent.", "Success") end
+end)
+addShopButton(ShopStylesSection, "Buy Spin", "Requires Steel Ball and $10,000.", "circle-dot", function()
+    if not shopHasItem("Steel Ball") or Utils.money() < 10000 then
+        shopNotify("Shop", "Spin requires Steel Ball and $10,000.", "Warning")
+        return
+    end
+    if fireDialogueChoice("Gyro", "Dialogue2", "Option1") then shopNotify("Shop", "Spin purchase request sent.", "Success") end
+end)
+addShopButton(ShopStylesSection, "Buy Vampire", "Requires Stone Mask and $10,000.", "moon", function()
+    if not shopHasItem("Stone Mask") or Utils.money() < 10000 then
+        shopNotify("Shop", "Vampire requires a Stone Mask and $10,000.", "Warning")
+        return
+    end
+    if fireDialogueChoice("Elder Vampire Roomy", "Dialogue5", "Option1") then shopNotify("Shop", "Vampire purchase request sent.", "Success") end
+end)
+addShopButton(ShopStylesSection, "Buy Hamon", "Requires a Hamon trainer item and $10,000; opens the trainer dialogue.", "sun", function()
+    local hasTrainerItem = shopHasItem("Caesar's Headband") or shopHasItem("Clackers") or shopHasItem("Zeppeli's Hat")
+    if not hasTrainerItem or Utils.money() < 10000 then
+        shopNotify("Shop", "Hamon requires Caesar's Headband, Clackers, or Zeppeli's Hat plus $10,000.", "Warning")
+        return
+    end
+    if not fireNpc("Lisa Lisa") then return end
+    task.spawn(function()
+        local deadline = os.clock() + 8
+        while os.clock() < deadline do
+            local stats = LP:FindFirstChild("PlayerStats")
+            local spec = stats and stats:FindFirstChild("Spec")
+            if spec and tostring(spec.Value) ~= "None" then
+                shopNotify("Shop", "Hamon trainer interaction completed.", "Success")
+                return
+            end
+            local dialogue = Gui.currentDialogue()
+            if dialogue then
+                if Gui.hasVisibleOptions(dialogue) then
+                    local option = Gui.option(dialogue, "Option1")
+                    if option and Gui.isVisible(option) then Gui.click(option) end
+                else
+                    Gui.skipClick()
+                end
+            end
+            task.wait(0.15)
+        end
+        shopNotify("Shop", "Hamon dialogue was opened, but the style was not confirmed. Finish the dialogue manually if needed.", "Info")
+    end)
+end)
+
+ShopItemsSection:Paragraph({
+    Title = "Item Purchases",
+    Desc = "Send purchase requests after checking the listed money requirement.",
+})
+for _, entry in ipairs({
+    {"Lucky Arrow", "1x Lucky Arrow", 75000},
+    {"Mysterious Arrow", "1x Mysterious Arrow", 750},
+    {"Rokakaka", "1x Rokakaka", 2500},
+    {"Pure Rokakaka", "1x Pure Rokakaka", 4000},
+    {"DIO's Diary", "1x DIO's Diary", 20000},
+}) do
+    local label, itemName, price = entry[1], entry[2], entry[3]
+    addShopButton(ShopItemsSection, "Buy " .. label, "Price: $" .. tostring(price), "shopping-cart", function()
+        shopBuyRequest(itemName, price)
+    end)
+end
+ShopPartsSection:Paragraph({
+    Title = "Saint's Corpse Parts",
+    Desc = "Purchase individual parts when you have enough money.",
+})
+for _, entry in ipairs({
+    {"Rib Cage of the Saint's Corpse", "1x Rib Cage of the Saint's Corpse", 3500},
+    {"Left Arm of the Saint's Corpse", "1x Left Arm of the Saint's Corpse", 15000},
+    {"Heart of the Saint's Corpse", "1x Heart of the Saint's Corpse", 45000},
+    {"Pelvis of the Saint's Corpse", "1x Pelvis of the Saint's Corpse", 45000},
+}) do
+    local label, itemName, price = entry[1], entry[2], entry[3]
+    addShopButton(ShopPartsSection, "Buy " .. label, "Price: $" .. tostring(price), "package", function()
+        shopBuyRequest(itemName, price)
+    end)
+end
+addShopButton(ShopConsumablesSection, "Buy Mysterious Bow", "Request the Mysterious Bow Seller dialogue.", "bow-arrow", function()
+    if fireDialogueChoice("Mysterious Bow Seller", "Dialogue4", "Option1") then shopNotify("Shop", "Mysterious Bow purchase request sent.", "Success") end
+end)
+addShopButton(ShopConsumablesSection, "Buy Pizza", "Costs $50.", "utensils", function()
+    if Utils.money() < 50 then shopNotify("Shop", "Pizza costs $50.", "Warning") return end
+    if fireDialogueChoice("Pizza", "Dialogue2", "Option1") then shopNotify("Shop", "Pizza request sent.", "Success") end
+end)
+addShopButton(ShopConsumablesSection, "Buy Tea", "Costs $50.", "coffee", function()
+    if Utils.money() < 50 then shopNotify("Shop", "Tea costs $50.", "Warning") return end
+    if fireDialogueChoice("Cafe", "Dialogue2", "Option1") then shopNotify("Shop", "Tea request sent.", "Success") end
+end)
 
 local WeatherTab = Window:Tab({Title = "Weather", Icon = "cloud", Desc = "Client-side lighting and atmosphere previews."})
 WeatherTab:Header("Weather Studio")
@@ -9614,7 +10941,6 @@ Loops.playerESP()
 Loops.spectate()
 Loops.playerInfo()
 Loops.counter()
-Loops.trolling()
 
 print("[METHION] Methion v1.2 loaded")
 
