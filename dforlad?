@@ -7850,7 +7850,7 @@ do
     aboutSection:Paragraph({Title = "Project", Desc = "Methion  |  Advanced YBA multi-functions script"})
     aboutSection:Paragraph({Title = "Version", Desc = "1.1"})
     aboutSection:Paragraph({Title = "Owner / Author", Desc = "Diablo"})
-    aboutSection:Paragraph({Title = "Interface and Lua Work", Desc = "azurey"})
+    aboutSection:Paragraph({Title = "Interface and Lua Work", Desc = "Diablo"})
     aboutSection:Paragraph({Title = "Usage Note", Desc = "Some functions rely on game objects and executor capabilities being available in the current session."})
 
     function dashboard:Refresh()
