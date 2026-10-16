@@ -6,7 +6,7 @@ local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
 local PhysicsService = game:GetService("PhysicsService")
 
-local AIRFLOW_LIBRARY_URL = "https://raw.githubusercontent.com/Methions/modf/refs/heads/main/airfloww"
+local AIRFLOW_LIBRARY_URL = "https://raw.githubusercontent.com/Methions/modf/refs/heads/main/modf"
 local libraryOk, AirflowLibrary = pcall(function()
     local source = game:HttpGet(AIRFLOW_LIBRARY_URL)
     assert(type(source) == "string" and #source > 0, "The Airflow library returned an empty response")
