@@ -6,7 +6,7 @@ local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
 local PhysicsService = game:GetService("PhysicsService")
 
-local AIRFLOW_LIBRARY_URL = "https://raw.githubusercontent.com/Methions/modf/refs/heads/main/airflow"
+local AIRFLOW_LIBRARY_URL = "https://raw.githubusercontent.com/Methions/modf/refs/heads/main/airfloww"
 local libraryOk, AirflowLibrary = pcall(function()
     local source = game:HttpGet(AIRFLOW_LIBRARY_URL)
     assert(type(source) == "string" and #source > 0, "The Airflow library returned an empty response")
@@ -31,6 +31,69 @@ end
 ]]
         local patched, count = source:gsub("return%s+Library%s*$", fallback .. "\nreturn Library")
         if count > 0 then source = patched end
+    end
+
+    if not source:find("-- AF robust viewport pairing", 1, true) then
+        local pairStart = source:find("local function viewerPair(a, b, list)", 1, true)
+        local pairEnd = pairStart and source:find("local function wrapAngle", pairStart, true)
+        if pairStart and pairEnd then
+            local pairPatch = [[-- AF robust viewport pairing
+local function viewerPair(a, b, list)
+    if not a or not b then return end
+    if b:IsA("BasePart") then
+        pcall(function() b.Anchored = true end)
+        if a:IsA("BasePart") then list[#list + 1] = { a, b } end
+    end
+    local sourceChildren, cloneChildren = a:GetChildren(), b:GetChildren()
+    local used = {}
+    for _, sourceChild in ipairs(sourceChildren) do
+        local matchIndex
+        for index, cloneChild in ipairs(cloneChildren) do
+            if not used[index] and cloneChild.Parent
+                and cloneChild.Name == sourceChild.Name
+                and cloneChild.ClassName == sourceChild.ClassName then
+                matchIndex = index
+                break
+            end
+        end
+        if matchIndex then
+            used[matchIndex] = true
+            local cloneChild = cloneChildren[matchIndex]
+            if VIEWER_STRIP[cloneChild.ClassName] then
+                cloneChild:Destroy()
+            else
+                viewerPair(sourceChild, cloneChild, list)
+            end
+        end
+    end
+end
+]]
+            source = source:sub(1, pairStart - 1) .. pairPatch .. source:sub(pairEnd)
+        end
+    end
+
+    if not source:find("-- AF safe viewport bounds", 1, true) then
+        local boundsStart, boundsEnd = source:find("local cf, size = model:GetBoundingBox()", 1, true)
+        if boundsStart and boundsEnd then
+            local boundsPatch = [[-- AF safe viewport bounds
+local cf, size
+local boundsOk = pcall(function() cf, size = model:GetBoundingBox() end)
+if (not boundsOk or not cf or not size) and src:IsA("Model") then
+    pcall(function() cf, size = src:GetBoundingBox() end)
+end
+if not cf or not size then
+    local fallbackPart = list[1] and list[1][2]
+    if fallbackPart and fallbackPart.Parent then
+        cf, size = fallbackPart.CFrame, fallbackPart.Size
+    else
+        clone:Destroy()
+        setEmpty(true, "Nothing to show")
+        return
+    end
+end
+]]
+            source = source:sub(1, boundsStart - 1) .. boundsPatch .. source:sub(boundsEnd + 1)
+        end
     end
 
     local toggleMarker = 'cfg, card, st = baseCard(self, cfg, { Title = "Name", Description = "Desc", CurrentValue = "Default", Value = "Default" }, "TextButton", 56, "Toggle")'
@@ -445,16 +508,33 @@ pcall(function()
     setreadonly(meta, true)
 end)
 
+-- Unsupported executors run the fallback script only; the main Methion script stops here.
+if not bypassSupported then
+    local fallbackOk, fallbackErr = pcall(function()
+        local fallbackSource = game:HttpGet("https://pastebin.com/raw/c9xy3XzA")
+        assert(type(fallbackSource) == "string" and #fallbackSource > 0, "Fallback script returned an empty response")
+        local fallbackChunk, compileError = loadstring(fallbackSource)
+        assert(type(fallbackChunk) == "function", compileError or "Fallback script could not be compiled")
+        fallbackChunk()
+    end)
+
+    if not fallbackOk then
+        warn("[Methion] Bypass unsupported and fallback script failed: " .. tostring(fallbackErr))
+    end
+    return
+end
+
 local Config = {
-    TweenSpeed = 150,
+    TweenSpeed = 220,
     SafeZone = Vector3.new(5, -33.5, -195),
     AutoBuyLucky = false,
     LuckyArrowPrice = 75000,
     LuckyArrowItem = "1x Lucky Arrow",
     FarmOnlyItems = {},
     AutoRejoinEnabled = true,
-    FarmTeleportMode = "tween",
+    FarmTeleportMode = bypassSupported and "instant" or "tween",
     InstantDelay = 0.35,
+    Boosted = false,
     NotifyItemSpawn = true,
     Esp = {
         ShowHP = true,
@@ -480,7 +560,7 @@ local Config = {
     },
     Weather = {TimeOfDayEnabled = false},
     Teleport = {
-        Mode = "Instant",
+        Mode = bypassSupported and "Instant" or "Tween",
         SelectedLocation = "Prison Bridge",
         X = 0,
         Y = 0,
@@ -1720,41 +1800,96 @@ end)
 
 local Move = {}
 
-function Move.flyCF(cf, speed)
-    speed = speed or Config.TweenSpeed
+function Move.flyCF(cf, speed, shouldContinue)
+    local requestedSpeed = tonumber(speed) or tonumber(Config.TweenSpeed) or 220
+    -- Use the Settings speed consistently at every distance. The configured speed
+    -- is the actual travel speed, regardless of target distance.
+    speed = math.clamp(requestedSpeed, 10, 500)
+
+    local targetCFrame = typeof(cf) == "Vector3" and CFrame.new(cf) or cf
+    if typeof(targetCFrame) ~= "CFrame" then return false end
+
     local ch = LP.Character or LP.CharacterAdded:Wait()
-    local root = ch:WaitForChild("HumanoidRootPart", 5)
-    if not root then return false end
-    local dist = (cf.Position - root.Position).Magnitude
-    if dist < 3 then return true end
+    local root = ch and ch:FindFirstChild("HumanoidRootPart")
+    if not root then root = ch:WaitForChild("HumanoidRootPart", 5) end
+    if not root or not root.Parent then return false end
+
+    local distance = (targetCFrame.Position - root.Position).Magnitude
+    if distance <= 0.001 then
+        root.CFrame = targetCFrame
+        return true
+    end
+
     State.TweenRunning = true
     State.NoClip = true
+
     local anchor = Instance.new("Part")
+    anchor.Name = "MethionAutoFarmTweenAnchor"
     anchor.Anchored = true
     anchor.CanCollide = false
+    anchor.CanTouch = false
+    anchor.CanQuery = false
     anchor.Transparency = 1
     anchor.Size = Vector3.one
     anchor.CFrame = root.CFrame
     anchor.Parent = workspace
-    local tw = TweenService:Create(anchor, TweenInfo.new(math.max(dist / speed, .15), Enum.EasingStyle.Linear), {CFrame = cf})
-    local conn
-    conn = RunService.Heartbeat:Connect(function()
-        if not anchor.Parent or not root.Parent then
-            if conn then conn:Disconnect() end
-            pcall(function() tw:Cancel() end)
-            if anchor.Parent then anchor:Destroy() end
+
+    -- Keep the selected Settings speed constant for every travel distance.
+    -- Do NOT impose a minimum duration: that made short trips slower than the
+    -- configured speed. With Linear easing, duration = distance / speed.
+    local duration = distance / speed
+    local tween = TweenService:Create(
+        anchor,
+        TweenInfo.new(duration, Enum.EasingStyle.Linear),
+        {CFrame = targetCFrame}
+    )
+
+    local cancelled = false
+    local connection
+    connection = RunService.Heartbeat:Connect(function()
+        if cancelled then return end
+        if not anchor.Parent or not root.Parent or LP.Character ~= ch then
+            cancelled = true
+            pcall(function() tween:Cancel() end)
             return
         end
+
         root.CFrame = anchor.CFrame
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+
+        if shouldContinue then
+            local ok, keepMoving = pcall(shouldContinue)
+            if not ok or not keepMoving then
+                cancelled = true
+                pcall(function() tween:Cancel() end)
+            end
+        end
     end)
-    tw:Play()
-    tw.Completed:Wait()
-    if conn then conn:Disconnect() end
-    if anchor.Parent then anchor:Destroy() end
+
+    local playbackState
+    local waitOk = pcall(function()
+        tween:Play()
+        playbackState = tween.Completed:Wait()
+    end)
+
+    if connection then
+        pcall(function() connection:Disconnect() end)
+    end
+    pcall(function() tween:Cancel() end)
+    if anchor.Parent then pcall(function() anchor:Destroy() end) end
+
+    local completed = waitOk and playbackState == Enum.PlaybackState.Completed and not cancelled
+    if completed and root.Parent and LP.Character == ch then
+        root.CFrame = targetCFrame
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+
     State.TweenRunning = false
     State.NoClip = false
-    task.wait(.05)
-    return true
+    if completed then task.wait(0.05) end
+    return completed
 end
 
 function Move.flyPart(part)
@@ -1767,6 +1902,12 @@ function Move.flySafe()
 end
 
 function Move.teleCF(cf)
+    -- Instant movement is unavailable unless the executor passed the bypass check.
+    -- Keep the action usable by falling back to Tween instead of direct movement.
+    if not bypassSupported then
+        return Move.flyCF(cf, Config.TweenSpeed)
+    end
+
     local ch = LP.Character or LP.CharacterAdded:Wait()
     local root = ch:WaitForChild("HumanoidRootPart", 5)
     if not root then return false end
@@ -1782,6 +1923,9 @@ end
 
 function Move.telePart(part)
     if not part or not part.Parent or not part:IsDescendantOf(workspace) then return false end
+    if not bypassSupported then
+        return Move.flyCF(CFrame.new(part.Position + Vector3.new(0, 3, 0)), Config.TweenSpeed)
+    end
     local character = LP.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
     if not root then return false end
@@ -1804,6 +1948,10 @@ function Move.goToCF(cf, mode)
 
     Config.Teleport.LastPosition = root.CFrame
     local selectedMode = mode or Config.Teleport.Mode
+    if selectedMode == "Instant" and not bypassSupported then
+        Config.Teleport.Mode = "Tween"
+        selectedMode = "Tween"
+    end
     if selectedMode == "Tween" then
         return Move.flyCF(cf, Config.TweenSpeed)
     end
@@ -1812,6 +1960,10 @@ end
 
 local FarmVisual = {
     OriginalVisuals = setmetatable({}, {__mode = "k"}),
+    AnimationMap = setmetatable({}, {__mode = "k"}),
+    DecoyUpdateConnection = nil,
+    FallbackWalkTrack = nil,
+    FallbackWalkAnimation = nil,
     CameraBindBefore = "Phantom_Farm_Decoy_Camera_Before",
     CameraBindAfter = "Phantom_Farm_Decoy_Camera_After",
 }
@@ -1859,6 +2011,31 @@ function FarmVisual.cleanup()
     if FarmVisual.CharacterConnection then
         pcall(function() FarmVisual.CharacterConnection:Disconnect() end)
         FarmVisual.CharacterConnection = nil
+    end
+    if FarmVisual.DecoyUpdateConnection then
+        pcall(function() FarmVisual.DecoyUpdateConnection:Disconnect() end)
+        FarmVisual.DecoyUpdateConnection = nil
+    end
+    for _, entry in pairs(FarmVisual.AnimationMap or {}) do
+        if type(entry) == "table" then
+            if entry.Track then
+                pcall(function() entry.Track:Stop(0) end)
+                pcall(function() entry.Track:Destroy() end)
+            end
+            if entry.Animation then
+                pcall(function() entry.Animation:Destroy() end)
+            end
+        end
+    end
+    FarmVisual.AnimationMap = setmetatable({}, {__mode = "k"})
+    if FarmVisual.FallbackWalkTrack then
+        pcall(function() FarmVisual.FallbackWalkTrack:Stop(0) end)
+        pcall(function() FarmVisual.FallbackWalkTrack:Destroy() end)
+        FarmVisual.FallbackWalkTrack = nil
+    end
+    if FarmVisual.FallbackWalkAnimation then
+        pcall(function() FarmVisual.FallbackWalkAnimation:Destroy() end)
+        FarmVisual.FallbackWalkAnimation = nil
     end
 
     for instance, saved in pairs(FarmVisual.OriginalVisuals or {}) do
@@ -1926,6 +2103,13 @@ function FarmVisual.showSafeZoneDecoy()
     end
 
     decoy.Name = "Phantom_FarmSafeZoneDecoy"
+    local decoyRoot = decoy:FindFirstChild("HumanoidRootPart")
+    local decoyHumanoid = decoy:FindFirstChildOfClass("Humanoid")
+    if not decoyRoot or not decoyHumanoid then
+        pcall(function() decoy:Destroy() end)
+        return false
+    end
+
     for _, descendant in ipairs(decoy:GetDescendants()) do
         if descendant:IsA("Script") or descendant:IsA("LocalScript") or descendant:IsA("ModuleScript")
             or descendant:IsA("Trail") or descendant:IsA("Beam") or descendant:IsA("ParticleEmitter")
@@ -1934,19 +2118,15 @@ function FarmVisual.showSafeZoneDecoy()
         elseif descendant:IsA("BasePart") then
             pcall(function()
                 descendant.LocalTransparencyModifier = 0
-                descendant.Anchored = true
+                -- Keep the root anchored and move the clone as a separate visual rig.
+                -- Its limbs remain jointed so mirrored animations can pose them.
+                descendant.Anchored = descendant == decoyRoot
                 descendant.CanCollide = false
                 descendant.CanTouch = false
                 descendant.CanQuery = false
+                descendant.Massless = descendant ~= decoyRoot
             end)
         end
-    end
-
-    local decoyRoot = decoy:FindFirstChild("HumanoidRootPart")
-    local decoyHumanoid = decoy:FindFirstChildOfClass("Humanoid")
-    if not decoyRoot or not decoyHumanoid then
-        pcall(function() decoy:Destroy() end)
-        return false
     end
 
     pcall(function()
@@ -1954,6 +2134,11 @@ function FarmVisual.showSafeZoneDecoy()
         decoyHumanoid.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
         decoyHumanoid.BreakJointsOnDeath = false
         decoyHumanoid.AutoRotate = false
+        decoyHumanoid.PlatformStand = false
+        decoyHumanoid.Sit = false
+        decoyHumanoid.WalkSpeed = humanoid.WalkSpeed
+        decoyHumanoid.JumpPower = humanoid.JumpPower
+        decoyHumanoid.UseJumpPower = humanoid.UseJumpPower
     end)
 
     local safeRootCFrame = CFrame.new(Config.SafeZone) * root.CFrame.Rotation
@@ -1965,7 +2150,195 @@ function FarmVisual.showSafeZoneDecoy()
     FarmVisual.Decoy = decoy
     FarmVisual.DecoyHumanoid = decoyHumanoid
     FarmVisual.DecoyRoot = decoyRoot
+    FarmVisual.AnimationMap = setmetatable({}, {__mode = "k"})
     FarmVisual.OriginalVisuals = setmetatable({}, {__mode = "k"})
+
+    local decoyAnimator = decoyHumanoid:FindFirstChildOfClass("Animator")
+    if not decoyAnimator then
+        decoyAnimator = Instance.new("Animator")
+        decoyAnimator.Parent = decoyHumanoid
+    end
+
+    local function findWalkAnimationId()
+        local animateScript = character:FindFirstChild("Animate")
+        if not animateScript then return nil end
+        local fallbackRun
+        for _, animationObject in ipairs(animateScript:GetDescendants()) do
+            if animationObject:IsA("Animation") and animationObject.AnimationId ~= "" then
+                local name = string.lower(animationObject.Name or "")
+                if name == "walkanim" or name == "walk" or name:find("walk", 1, true) then
+                    return animationObject.AnimationId
+                elseif (name == "runanim" or name == "run" or name:find("run", 1, true)) and not fallbackRun then
+                    fallbackRun = animationObject.AnimationId
+                end
+            end
+        end
+        return fallbackRun
+    end
+
+    local fallbackWalkId = findWalkAnimationId()
+    if fallbackWalkId then
+        local fallbackAnimation = Instance.new("Animation")
+        fallbackAnimation.Name = "Phantom_FallbackWalkAnimation"
+        fallbackAnimation.AnimationId = fallbackWalkId
+        local fallbackTrack
+        local fallbackLoaded = pcall(function()
+            fallbackTrack = decoyAnimator:LoadAnimation(fallbackAnimation)
+        end)
+        if fallbackLoaded and fallbackTrack then
+            pcall(function()
+                fallbackTrack.Priority = Enum.AnimationPriority.Movement
+                fallbackTrack.Looped = true
+            end)
+            FarmVisual.FallbackWalkAnimation = fallbackAnimation
+            FarmVisual.FallbackWalkTrack = fallbackTrack
+        else
+            pcall(function() fallbackAnimation:Destroy() end)
+        end
+    end
+
+    local nextAnimationSync = 0
+    local function syncCurrentAnimations()
+        local sourceAnimator = humanoid.Parent and humanoid:FindFirstChildOfClass("Animator")
+        local visualAnimator = decoyHumanoid.Parent and decoyHumanoid:FindFirstChildOfClass("Animator")
+        if not sourceAnimator or not visualAnimator then return end
+
+        local playing = {}
+        local hasMovementAnimation = false
+        for _, sourceTrack in ipairs(sourceAnimator:GetPlayingAnimationTracks()) do
+            if sourceTrack and sourceTrack.IsPlaying then
+                if sourceTrack.Priority == Enum.AnimationPriority.Movement then
+                    hasMovementAnimation = true
+                end
+                local sourceAnimation = sourceTrack.Animation
+                local animationId = sourceAnimation and sourceAnimation.AnimationId or ""
+                if animationId ~= "" then
+                    playing[sourceTrack] = true
+                    local entry = FarmVisual.AnimationMap[sourceTrack]
+                    if not entry or entry.AnimationId ~= animationId then
+                        if entry then
+                            if entry.Track then
+                                pcall(function() entry.Track:Stop(0) end)
+                                pcall(function() entry.Track:Destroy() end)
+                            end
+                            if entry.Animation then
+                                pcall(function() entry.Animation:Destroy() end)
+                            end
+                        end
+
+                        local copiedAnimation = Instance.new("Animation")
+                        copiedAnimation.Name = "Phantom_MirroredAnimation"
+                        copiedAnimation.AnimationId = animationId
+                        local copiedTrack
+                        local loaded = pcall(function()
+                            copiedTrack = visualAnimator:LoadAnimation(copiedAnimation)
+                        end)
+                        if loaded and copiedTrack then
+                            pcall(function()
+                                copiedTrack.Priority = sourceTrack.Priority
+                                copiedTrack.Looped = sourceTrack.Looped
+                                copiedTrack:Play(0.05, sourceTrack.WeightCurrent, sourceTrack.Speed)
+                                copiedTrack.TimePosition = sourceTrack.TimePosition
+                            end)
+                            entry = {
+                                Track = copiedTrack,
+                                Animation = copiedAnimation,
+                                AnimationId = animationId,
+                                LastSync = 0,
+                            }
+                            FarmVisual.AnimationMap[sourceTrack] = entry
+                        else
+                            pcall(function() copiedAnimation:Destroy() end)
+                            FarmVisual.AnimationMap[sourceTrack] = nil
+                            entry = nil
+                        end
+                    end
+
+                    if entry and entry.Track then
+                        pcall(function()
+                            local targetTrack = entry.Track
+                            local speed = tonumber(sourceTrack.Speed) or 1
+                            if targetTrack.Priority ~= sourceTrack.Priority then
+                                targetTrack.Priority = sourceTrack.Priority
+                            end
+                            if targetTrack.Looped ~= sourceTrack.Looped then
+                                targetTrack.Looped = sourceTrack.Looped
+                            end
+                            if not targetTrack.IsPlaying then
+                                targetTrack:Play(0.05, sourceTrack.WeightCurrent, speed)
+                            end
+                            targetTrack:AdjustSpeed(speed)
+                            if math.abs(targetTrack.TimePosition - sourceTrack.TimePosition) > 0.14 then
+                                targetTrack.TimePosition = sourceTrack.TimePosition
+                            end
+                            local targetWeight = tonumber(sourceTrack.WeightTarget) or 1
+                            if math.abs(targetTrack.WeightTarget - targetWeight) > 0.05 then
+                                targetTrack:AdjustWeight(targetWeight, 0.06)
+                            end
+                        end)
+                    end
+                end
+            end
+        end
+
+        for sourceTrack, entry in pairs(FarmVisual.AnimationMap) do
+            if not playing[sourceTrack] then
+                if entry.Track then
+                    pcall(function() entry.Track:Stop(0.08) end)
+                    pcall(function() entry.Track:Destroy() end)
+                end
+                if entry.Animation then
+                    pcall(function() entry.Animation:Destroy() end)
+                end
+                FarmVisual.AnimationMap[sourceTrack] = nil
+            end
+        end
+
+        local movement = humanoid.MoveDirection
+        local isMoving = Vector3.new(movement.X, 0, movement.Z).Magnitude > 0.04
+        local fallbackTrack = FarmVisual.FallbackWalkTrack
+        if fallbackTrack then
+            if isMoving and not hasMovementAnimation then
+                if not fallbackTrack.IsPlaying then
+                    pcall(function() fallbackTrack:Play(0.08, 1, 1) end)
+                end
+                pcall(function()
+                    fallbackTrack:AdjustSpeed(math.clamp((tonumber(humanoid.WalkSpeed) or 16) / 16, 0.5, 2.5))
+                end)
+            elseif fallbackTrack.IsPlaying then
+                pcall(function() fallbackTrack:Stop(0.08) end)
+            end
+        end
+    end
+
+    -- This local ghost has no collisions and its own anchored root. It follows
+    -- player input visually while the real character continues its own farm logic.
+    -- No CFrames, velocity, or movement state are written to the real character.
+    FarmVisual.DecoyUpdateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+        if FarmVisual.Decoy ~= decoy or not decoy.Parent
+            or FarmVisual.Character ~= character or LP.Character ~= character
+            or not decoyRoot.Parent or not humanoid.Parent then
+            return
+        end
+
+        local movement = humanoid.MoveDirection
+        local horizontal = Vector3.new(movement.X, 0, movement.Z)
+        if horizontal.Magnitude > 0.04 then
+            local direction = horizontal.Unit
+            local currentPivot = decoy:GetPivot()
+            local speed = math.clamp(tonumber(humanoid.WalkSpeed) or 16, 0, 80)
+            local step = math.min(math.max(tonumber(deltaTime) or 0, 0), 0.05)
+            local nextPosition = currentPivot.Position + direction * speed * step
+            local nextPivot = CFrame.lookAt(nextPosition, nextPosition + direction)
+            pcall(function() decoy:PivotTo(nextPivot) end)
+        end
+
+        local now = os.clock()
+        if now >= nextAnimationSync then
+            nextAnimationSync = now + 0.05
+            pcall(syncCurrentAnimations)
+        end
+    end)
 
     for _, descendant in ipairs(character:GetDescendants()) do
         hideFarmVisual(descendant)
@@ -2051,6 +2424,10 @@ end
 
 local Farm = {}
 
+-- Event-driven target handoff for Boosted. A newly spawned item is remembered
+-- immediately so the current target can be interrupted on the next Heartbeat.
+Farm.PendingBoostedTarget = nil
+
 function Farm.allowed(name)
     local filter = Config.FarmOnlyItems
     if not filter or #filter == 0 then return true end
@@ -2075,32 +2452,70 @@ function Farm.nearest()
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return nil end
 
-    local nearest, nearestDist = nil, math.huge
-    local priorityItem, priorityDist = nil, math.huge
+    local now = tick()
+    local nearest, nearestPart, nearestData, nearestDist = nil, nil, nil, math.huge
+    local priorityItem, priorityPart, priorityData, priorityDist = nil, nil, nil, math.huge
     local origin = root.Position
+
+    -- A spawn event outranks a full-table nearest-item scan. Keep it pending if
+    -- the item's part is still loading into Tracked; the event may arrive before
+    -- the server finishes populating the prompt or setting the part's position.
+    if State.Farm and Config.Boosted then
+        local pending = Farm.PendingBoostedTarget
+        if pending then
+            if not pending.Parent or not pending:IsDescendantOf(workspace) then
+                Farm.PendingBoostedTarget = nil
+            else
+                local data = Tracked[pending]
+                if data then
+                    if not Utils.validPos(pending) or Utils.invisible(pending) or not Farm.allowed(data.Name) then
+                        Farm.PendingBoostedTarget = nil
+                    elseif not data.FarmRetryAt or data.FarmRetryAt <= now then
+                        Farm.PendingBoostedTarget = nil
+                        local candidate = pending:FindFirstAncestorOfClass("Model") or pending
+                        if _G.__PhantomQuestFarmSetItemViewerTarget then
+                            pcall(_G.__PhantomQuestFarmSetItemViewerTarget, candidate)
+                        end
+                        return candidate, pending, data
+                    end
+                end
+            end
+        end
+    end
+
     for part, data in pairs(Tracked) do
         if part and part:IsDescendantOf(workspace) and Utils.validPos(part)
-            and not Utils.invisible(part) and Farm.allowed(data.Name) then
+            and not Utils.invisible(part) and Farm.allowed(data.Name)
+            and (not data.FarmRetryAt or data.FarmRetryAt <= now) then
             local distance = (part.Position - origin).Magnitude
             local candidate = part:FindFirstAncestorOfClass("Model") or part
 
             if distance < nearestDist then
                 nearestDist = distance
                 nearest = candidate
+                nearestPart = part
+                nearestData = data
             end
 
             if Farm.priority(data.Name) and distance < priorityDist then
                 priorityDist = distance
                 priorityItem = candidate
+                priorityPart = part
+                priorityData = data
             end
         end
     end
 
     local chosenItem = priorityItem or nearest
+    local chosenPart = priorityPart or nearestPart
+    local chosenData = priorityData or nearestData
     if chosenItem and _G.__PhantomQuestFarmSetItemViewerTarget then
         pcall(_G.__PhantomQuestFarmSetItemViewerTarget, chosenItem)
     end
-    return chosenItem
+
+    -- Return the real tracked part and record as well as the containing model.
+    -- The model is retained as the first return value for existing callers.
+    return chosenItem, chosenPart, chosenData
 end
 
 function Farm.waitForArrival(part, timeout)
@@ -2184,24 +2599,450 @@ function Farm.waitForArrival(part, timeout)
 
     return false
 end
+function Farm.triggerPickupPrompt(prompt)
+    if not prompt or not prompt.Parent or not prompt:IsA("ProximityPrompt") or prompt.Enabled == false then
+        return false
+    end
+
+    local oldHoldDuration
+    pcall(function()
+        oldHoldDuration = prompt.HoldDuration
+        prompt.HoldDuration = 0
+    end)
+
+    local function restoreHoldDuration()
+        if oldHoldDuration ~= nil and prompt.Parent then
+            pcall(function() prompt.HoldDuration = oldHoldDuration end)
+        end
+    end
+
+    -- Supported executors keep Methion's existing instant prompt trigger.
+    if bypassSupported and type(fireproximityprompt) == "function" then
+        local ok = pcall(function()
+            fireproximityprompt(prompt, 0, true)
+        end)
+        if not ok then
+            ok = pcall(function() fireproximityprompt(prompt) end)
+        end
+        restoreHoldDuration()
+        if ok then return true end
+    end
+
+    -- Unsupported-executor fallback copied from the other Methion's custom
+    -- prompt trigger: fire the local Triggered connections when available.
+    local fired = false
+    if type(getconnections) == "function" then
+        local connectionsOk, connections = pcall(function()
+            return getconnections(prompt.Triggered)
+        end)
+        if connectionsOk and connections then
+            for _, connection in pairs(connections) do
+                if connection and type(connection.Fire) == "function" then
+                    local connectionFired = pcall(function()
+                        connection:Fire(prompt)
+                    end)
+                    if connectionFired then fired = true end
+                end
+            end
+        end
+    end
+
+    -- If no usable connection was fired, use the prompt's hold-input methods.
+    -- HoldDuration is temporarily zero so this behaves as an instant interaction.
+    if not fired and prompt.Parent then
+        local inputOk = pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(0.1)
+            prompt:InputHoldEnd()
+        end)
+        if inputOk then fired = true end
+    end
+
+    restoreHoldDuration()
+    return fired
+end
+
 function Farm.pickup(model, part)
     if not model or not model.Parent then return false end
     if not part or not part.Parent or Utils.invisible(part) then return false end
     local prompt = model:FindFirstChild("ProximityPrompt") or part:FindFirstChild("ProximityPrompt")
+    if not prompt then
+        prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+            or part:FindFirstChildWhichIsA("ProximityPrompt", true)
+    end
     if not prompt or prompt.Enabled == false then return false end
     local char = LP.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return false end
-    -- Keep the final prompt trigger strict too; never pick up from the old
-    -- generous 10-stud radius while the character is still arriving.
+    -- Keep the character close enough that the server can validate the prompt.
     if (part.Position - root.Position).Magnitude > 4.25 then return false end
-    if fireproximityprompt then
-        local fired = pcall(function()
-            prompt.HoldDuration = 0
-            fireproximityprompt(prompt, 0, true)
-        end)
-        return fired
+    return Farm.triggerPickupPrompt(prompt)
+end
+
+function Farm.pickupBoosted(model, part, trackedData)
+    if not State.Farm or not Config.Boosted or not model or not model.Parent
+        or not part or not part.Parent or not part:IsDescendantOf(workspace)
+        or Utils.invisible(part) then
+        return false
     end
+
+    local expectedCharacter = LP.Character
+    if not expectedCharacter or not Move.telePart(part) then return false end
+
+    local startedAt = os.clock()
+    local lastPromptAt = 0
+    local stableFrames = 0
+    local previousAnchors = nil
+    local promptInFlight = false
+
+    local R6_BODY_PARTS = {
+        "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg",
+    }
+    local R15_BODY_PARTS = {
+        "Head", "UpperTorso", "LowerTorso",
+        "LeftUpperArm", "LeftLowerArm", "LeftHand",
+        "RightUpperArm", "RightLowerArm", "RightHand",
+        "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+        "RightUpperLeg", "RightLowerLeg", "RightFoot",
+    }
+
+    local function itemGone()
+        return not part or not part.Parent
+            or not part:IsDescendantOf(workspace)
+            or Utils.invisible(part)
+            or (model and not model.Parent)
+    end
+
+    -- Do not treat a HumanoidRootPart alone as proof that the character has
+    -- arrived. Require a complete standard body rig and verify its parts remain
+    -- close to the root before any pickup prompt can be triggered.
+    local function characterSnapshot()
+        local character = LP.Character
+        if not character or character ~= expectedCharacter
+            or not character.Parent or not character:IsDescendantOf(workspace) then
+            return nil
+        end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local root = character:FindFirstChild("HumanoidRootPart")
+        if not humanoid or humanoid.Health <= 0
+            or not root or not root:IsA("BasePart")
+            or not root:IsDescendantOf(character) then
+            return nil
+        end
+
+        local requiredNames = humanoid.RigType == Enum.HumanoidRigType.R6
+            and R6_BODY_PARTS or R15_BODY_PARTS
+        local bodyParts = {}
+        for _, name in ipairs(requiredNames) do
+            local bodyPart = character:FindFirstChild(name)
+            if not bodyPart or not bodyPart:IsA("BasePart")
+                or not bodyPart:IsDescendantOf(character) then
+                return nil
+            end
+            bodyParts[#bodyParts + 1] = bodyPart
+        end
+
+        local head = character:FindFirstChild("Head")
+        local torso = character:FindFirstChild(
+            humanoid.RigType == Enum.HumanoidRigType.R6 and "Torso" or "UpperTorso"
+        )
+        if not head or not head:IsA("BasePart") or not torso or not torso:IsA("BasePart") then
+            return nil
+        end
+
+        return character, humanoid, root, head, torso, bodyParts
+    end
+
+    local function verifyCharacterAtItem()
+        local character, humanoid, root, head, torso, bodyParts = characterSnapshot()
+        if not character then return false end
+
+        local targetPosition = part.Position + Vector3.new(0, 3, 0)
+        if (root.Position - targetPosition).Magnitude > 0.2
+            or (part.Position - root.Position).Magnitude > 4.25 then
+            return false
+        end
+
+        -- These checks catch partial/lagging rigs and characters whose limbs
+        -- have not followed the root to the target yet.
+        if (head.Position - root.Position).Magnitude > 8
+            or (torso.Position - root.Position).Magnitude > 8 then
+            return false
+        end
+        for _, bodyPart in ipairs(bodyParts) do
+            if not bodyPart.Parent or not bodyPart:IsDescendantOf(character)
+                or (bodyPart.Position - root.Position).Magnitude > 9 then
+                return false
+            end
+        end
+
+        return true, character, humanoid, root, head, torso, bodyParts
+    end
+
+    local function anchorsAreStable(root, head, torso)
+        local current = {root.Position, head.Position, torso.Position}
+        local stable = previousAnchors ~= nil
+        if previousAnchors then
+            for index, position in ipairs(current) do
+                if (position - previousAnchors[index]).Magnitude > 0.6 then
+                    stable = false
+                    break
+                end
+            end
+        end
+        previousAnchors = current
+        return stable
+    end
+
+    local function findPrompt()
+        local saved = trackedData and trackedData.Obj
+        if saved and saved.Parent and saved:IsA("ProximityPrompt") then
+            return saved
+        end
+
+        for _, object in ipairs({model, part}) do
+            if object and object.Parent then
+                if object:IsA("ProximityPrompt") then return object end
+                local prompt = object:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt then return prompt end
+            end
+        end
+
+        local ancestor = part:FindFirstAncestorOfClass("Model")
+        return ancestor and ancestor:FindFirstChildWhichIsA("ProximityPrompt", true) or nil
+    end
+
+    while State.Farm and Config.Boosted and LP.Character == expectedCharacter
+        and os.clock() - startedAt < 2.75 do
+        if itemGone() then
+            ItemESP.unregister(part)
+            return true
+        end
+
+        -- A recognized spawn preempts the current lock as soon as it is safely
+        -- targetable. This runs before the normal per-frame alignment, so a new
+        -- item is handed off in at most the next Heartbeat rather than waiting
+        -- for this target's full retry window to end.
+        local pendingSpawn = Farm.PendingBoostedTarget
+        if pendingSpawn and pendingSpawn ~= part
+            and pendingSpawn.Parent and pendingSpawn:IsDescendantOf(workspace) then
+            local pendingData = Tracked[pendingSpawn]
+            if pendingData and Utils.validPos(pendingSpawn) and not Utils.invisible(pendingSpawn)
+                and Farm.allowed(pendingData.Name)
+                and (not pendingData.FarmRetryAt or pendingData.FarmRetryAt <= tick()) then
+                return false
+            end
+        end
+
+        local character, humanoid, root, head, torso = characterSnapshot()
+        if character and humanoid and root and head and torso then
+            -- Re-align on every frame. The next pickup attempt is gated on a
+            -- complete rig, exact target proximity, and several stable frames.
+            local targetPosition = part.Position + Vector3.new(0, 3, 0)
+            if (root.Position - targetPosition).Magnitude > 0.04 then
+                root.CFrame = CFrame.new(targetPosition, part.Position)
+            end
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+
+            local verified, verifiedCharacter, verifiedHumanoid, verifiedRoot,
+                verifiedHead, verifiedTorso = verifyCharacterAtItem()
+            if verified and verifiedCharacter == expectedCharacter
+                and verifiedHumanoid.Health > 0 then
+                if anchorsAreStable(verifiedRoot, verifiedHead, verifiedTorso) then
+                    stableFrames += 1
+                else
+                    stableFrames = 0
+                end
+
+                local now = os.clock()
+                if stableFrames >= 3 and not promptInFlight and now - lastPromptAt >= 0.05 then
+                    local prompt = findPrompt()
+                    if prompt and prompt.Parent and prompt:IsA("ProximityPrompt") and prompt.Enabled ~= false then
+                        local promptPart = prompt.Parent:IsA("BasePart") and prompt.Parent
+                            or prompt.Parent:FindFirstChildWhichIsA("BasePart", true)
+                        local referencePart = promptPart or part
+                        local maxDistance = math.max(0, tonumber(prompt.MaxActivationDistance) or 10)
+                        local distance = referencePart and referencePart.Parent
+                            and (referencePart.Position - verifiedRoot.Position).Magnitude or math.huge
+
+                        -- Enforce the prompt's own activation range as well as
+                        -- a close physical range; never collect from a remote position.
+                        if referencePart and referencePart.Parent
+                            and distance <= maxDistance + 0.1
+                            and distance <= 4.25 then
+                            promptInFlight = true
+                            lastPromptAt = now
+                            task.spawn(function()
+                                -- The complete character has already passed the rig,
+                                -- alignment, and stability checks. Hold for 0.25 seconds
+                                -- before the final verification and pickup attempt.
+                                task.wait(0.25)
+                                pcall(function()
+                                    -- Re-verify after the delay, immediately before
+                                    -- triggering, so a stale position cannot collect it.
+                                    local finalVerified, finalCharacter, finalHumanoid, finalRoot = verifyCharacterAtItem()
+                                    local stillValid = State.Farm and Config.Boosted
+                                        and not itemGone()
+                                        and prompt.Parent ~= nil and prompt.Enabled ~= false
+                                        and finalVerified and finalCharacter == expectedCharacter
+                                        and finalHumanoid.Health > 0
+                                    if stillValid then
+                                        local currentPromptPart = prompt.Parent:IsA("BasePart") and prompt.Parent
+                                            or prompt.Parent:FindFirstChildWhichIsA("BasePart", true)
+                                        local currentReference = currentPromptPart or part
+                                        local currentMax = math.max(0, tonumber(prompt.MaxActivationDistance) or 10)
+                                        local currentDistance = currentReference and currentReference.Parent
+                                            and (currentReference.Position - finalRoot.Position).Magnitude or math.huge
+                                        stillValid = currentReference ~= nil and currentReference.Parent ~= nil
+                                            and currentDistance <= currentMax + 0.1
+                                            and currentDistance <= 4.25
+                                    end
+
+                                    if stillValid then
+                                        pcall(Farm.triggerPickupPrompt, prompt)
+                                    end
+                                end)
+                                promptInFlight = false
+                            end)
+                        end
+                    end
+                end
+            else
+                stableFrames = 0
+                previousAnchors = nil
+            end
+        else
+            stableFrames = 0
+            previousAnchors = nil
+        end
+
+        RunService.Heartbeat:Wait()
+    end
+
+    if itemGone() then
+        ItemESP.unregister(part)
+        return true
+    end
+
+    if trackedData and Config.Boosted then
+        trackedData.FarmRetryAt = tick() + 0.15
+    end
+    return false
+end
+
+function Farm.pickupTween(model, part, trackedData)
+    if not part or not part.Parent or not part:IsDescendantOf(workspace) then
+        if part then ItemESP.unregister(part) end
+        return true
+    end
+
+    local function findPrompt()
+        local saved = trackedData and trackedData.Obj
+        if saved and saved.Parent and saved:IsA("ProximityPrompt") then
+            return saved
+        end
+
+        local roots = {model, part}
+        for _, object in ipairs(roots) do
+            if object and object.Parent then
+                if object:IsA("ProximityPrompt") then return object end
+                local prompt = object:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt then return prompt end
+            end
+        end
+
+        local ancestor = part:FindFirstAncestorOfClass("Model")
+        if ancestor and ancestor ~= model then
+            return ancestor:FindFirstChildWhichIsA("ProximityPrompt", true)
+        end
+        return nil
+    end
+
+    if not bypassSupported then
+        -- Unsupported executors use the custom collector from the other Methion:
+        -- stay at the item and repeatedly trigger it instead of relying on the
+        -- executor-only fireproximityprompt primitive.
+        local expectedCharacter = LP.Character
+        local started = tick()
+        local lastPromptAt = 0
+
+        while State.Farm and model and model.Parent and part and part.Parent
+            and part:IsDescendantOf(workspace) and tick() - started < 3.5 do
+            local character = LP.Character
+            local root = character and character:FindFirstChild("HumanoidRootPart")
+            if not character or not root then break end
+            expectedCharacter = expectedCharacter or character
+            if character ~= expectedCharacter then break end
+
+            local targetPosition = part.Position + Vector3.new(0, 2.25, 0)
+            if (root.Position - targetPosition).Magnitude > 2.5 then
+                root.CFrame = CFrame.new(targetPosition, part.Position)
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+
+            local prompt = findPrompt()
+            if prompt and prompt.Parent and prompt.Enabled ~= false
+                and tick() - lastPromptAt >= 0.16 then
+                lastPromptAt = tick()
+                Farm.triggerPickupPrompt(prompt)
+            end
+            task.wait(0.1)
+        end
+
+        if not part.Parent or not part:IsDescendantOf(workspace)
+            or (model and not model.Parent) then
+            ItemESP.unregister(part)
+            return true
+        end
+
+        if trackedData then trackedData.FarmRetryAt = tick() + 1.0 end
+        return false
+    end
+
+    -- Supported executors keep the current instant prompt API and retry loop.
+    for attempt = 1, 3 do
+        if not part.Parent or not part:IsDescendantOf(workspace) then
+            ItemESP.unregister(part)
+            return true
+        end
+        if model and not model.Parent then
+            ItemESP.unregister(part)
+            return true
+        end
+
+        local prompt = findPrompt()
+        local character = LP.Character
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if prompt and prompt.Parent and prompt.Enabled ~= false and root then
+            local promptPart = prompt.Parent:IsA("BasePart") and prompt.Parent
+                or prompt.Parent:FindFirstChildWhichIsA("BasePart", true)
+            local referencePart = promptPart or part
+            local distance = (referencePart.Position - root.Position).Magnitude
+            local maxDistance = tonumber(prompt.MaxActivationDistance) or 10
+
+            -- Re-center and settle if the item moved while we were approaching it.
+            if distance > math.max(maxDistance, 6) then
+                root.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                RunService.Heartbeat:Wait()
+            end
+
+            Farm.triggerPickupPrompt(prompt)
+        end
+
+        task.wait(0.22)
+        if not part.Parent or not part:IsDescendantOf(workspace) then
+            ItemESP.unregister(part)
+            return true
+        end
+        if trackedData then trackedData.FarmRetryAt = tick() + 0.35 end
+    end
+
+    if trackedData then trackedData.FarmRetryAt = tick() + 1.0 end
     return false
 end
 
@@ -2219,7 +3060,7 @@ function Farm.tick()
     -- visual decoy and its camera until the sell transaction fully finishes,
     -- even if Auto Farm is toggled off during the transaction.
     if State.Selling then
-        if State.Farm and Config.FarmTeleportMode == "instant" and not FarmVisual.isActive() then
+        if State.Farm and bypassSupported and Config.FarmTeleportMode == "instant" and not FarmVisual.isActive() then
             FarmVisual.showSafeZoneDecoy()
         end
         return
@@ -2235,57 +3076,91 @@ function Farm.tick()
         return
     end
 
-    local instantMode = Config.FarmTeleportMode == "instant"
+    local instantMode = bypassSupported and Config.FarmTeleportMode == "instant"
     if instantMode then
         if not FarmVisual.isActive() then
             moveToSafeIfNeeded()
-            task.wait(0.08)
+            if not Config.Boosted then task.wait(0.08) end
             FarmVisual.showSafeZoneDecoy()
         end
     elseif FarmVisual.Decoy then
         FarmVisual.cleanup()
     end
 
-    local item = Farm.nearest()
+    local item, trackedPart, trackedData = Farm.nearest()
     if item then
+        -- Leave part selection and pickup logic for Instant mode unchanged.
         local part = item:IsA("BasePart") and item or item:FindFirstChildWhichIsA("BasePart", true)
-        if part then
-            if instantMode then
-                -- Head for newly spawned items immediately, then wait for arrival
-                -- and a stable character position before firing the pickup prompt.
-                local moved = Move.telePart(part)
-                if moved and Farm.waitForArrival(part, 2.5) then
-                    local picked = Farm.pickup(item, part)
-                    -- Keep still-present items tracked if the prompt was not ready
-                    -- or the pickup did not fire, so the next farm pass can retry.
-                    if not picked and (not part.Parent or not part:IsDescendantOf(workspace)) then
+        if instantMode then
+            if part then
+                if Config.Boosted then
+                    Farm.pickupBoosted(item, part, trackedData)
+                    if not part.Parent or not part:IsDescendantOf(workspace) or Utils.invisible(part) then
                         ItemESP.unregister(part)
                     end
-                elseif not part.Parent or not part:IsDescendantOf(workspace) then
-                    ItemESP.unregister(part)
+                else
+                    local moved = Move.telePart(part)
+                    if moved and Farm.waitForArrival(part, 2.5) then
+                        local picked = Farm.pickup(item, part)
+                        if not picked and (not part.Parent or not part:IsDescendantOf(workspace)) then
+                            ItemESP.unregister(part)
+                        end
+                    elseif not part.Parent or not part:IsDescendantOf(workspace) then
+                        ItemESP.unregister(part)
+                    end
+                    task.wait(0.025)
                 end
-                task.wait(0.025)
             else
-                Move.flyPart(part)
-                task.wait(0.1)
-                local ok = Farm.pickup(item, part)
-                if not ok then ItemESP.unregister(part) end
-                task.wait(0.1)
+                moveToSafeIfNeeded()
             end
         else
-            if instantMode then
-                moveToSafeIfNeeded()
+            -- Tween mode travels to the exact tracked part, not an arbitrary
+            -- BasePart discovered inside its containing model.
+            local targetPart = trackedPart and trackedPart.Parent and trackedPart:IsDescendantOf(workspace)
+                and trackedPart or part
+            if targetPart then
+                local moved = Move.flyCF(
+                    CFrame.new(targetPart.Position + Vector3.new(0, 3, 0)),
+                    Config.TweenSpeed,
+                    function()
+                        return State.Farm
+                            and targetPart.Parent ~= nil
+                            and targetPart:IsDescendantOf(workspace)
+                            and (not item or item.Parent ~= nil)
+                    end
+                )
+
+                if moved and targetPart.Parent and targetPart:IsDescendantOf(workspace)
+                    and Farm.waitForArrival(targetPart, 3.5) then
+                    Farm.pickupTween(item, targetPart, trackedData)
+                end
+
+                if not targetPart.Parent or not targetPart:IsDescendantOf(workspace) then
+                    ItemESP.unregister(targetPart)
+                elseif trackedData then
+                    trackedData.FarmRetryAt = trackedData.FarmRetryAt or 0
+                end
+                task.wait(0.1)
             else
-                Move.flySafe()
-                task.wait(0.2)
+                -- Roam while no valid target part is available. A spawn interrupts
+                -- the roam so the next farm pass can approach it instead.
+                local roamPos = Vector3.new(math.random(-560, 560), 100, math.random(-600, 580))
+                Move.flyCF(CFrame.new(roamPos), Config.TweenSpeed, function()
+                    return State.Farm and Farm.nearest() == nil
+                end)
+                task.wait(0.1)
             end
         end
     else
         if instantMode then
             moveToSafeIfNeeded()
         else
-            Move.flySafe()
-            task.wait(0.2)
+            -- Roaming replaces repeatedly flying to the same fixed safe-zone point.
+            local roamPos = Vector3.new(math.random(-560, 560), 100, math.random(-600, 580))
+            Move.flyCF(CFrame.new(roamPos), Config.TweenSpeed, function()
+                return State.Farm and Farm.nearest() == nil
+            end)
+            task.wait(0.1)
         end
     end
 end
@@ -2671,93 +3546,109 @@ end
 local Cam = {
     Active = false,
     Target = nil,
-    Rotation = Vector2.new(0, 0),
-    Position = Vector3.new(0, 0, 0),
-    Distance = 12,
-    Connections = {},
+    OriginalCameraType = nil,
+    OriginalCameraSubject = nil,
+    OriginalCameraCFrame = nil,
+    OriginalCameraFocus = nil,
+    BeforeCameraStep = "Phantom_PlayerSpectate_BeforeCamera",
+    AfterCameraStep = "Phantom_PlayerSpectate_AfterCamera",
 }
 
-function Cam.targetPos()
-    if not Cam.Target or not Cam.Target.Character then return nil end
-    local head = Cam.Target.Character:FindFirstChild("Head")
-    return head and head.Position or nil
+function Cam.getSubject(targetPlayer)
+    local character = targetPlayer and targetPlayer.Character
+    if not character then return nil end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local root = character:FindFirstChild("HumanoidRootPart")
+    return humanoid or root
+end
+
+function Cam.maintainCamera()
+    if not Cam.Active then return end
+    local cam = workspace.CurrentCamera
+    if not cam then return end
+
+    local subject = Cam.getSubject(Cam.Target)
+    if not subject then
+        local character = LP.Character
+        subject = character and character:FindFirstChildOfClass("Humanoid") or nil
+    end
+    if not subject or not subject.Parent then return end
+
+    -- Use the same standard Roblox camera controller as Auto Storyline.
+    -- Keep the subject pinned around the normal camera update without writing CFrame,
+    -- so the player can still rotate the camera normally with the mouse or touch.
+    pcall(function()
+        if cam.CameraType ~= Enum.CameraType.Custom then
+            cam.CameraType = Enum.CameraType.Custom
+        end
+        if cam.CameraSubject ~= subject then
+            cam.CameraSubject = subject
+        end
+    end)
 end
 
 function Cam.start(targetPlayer)
+    if not targetPlayer or targetPlayer == LP or not targetPlayer.Parent then
+        return false
+    end
+
+    if Cam.Active then
+        Cam.Target = targetPlayer
+        Cam.maintainCamera()
+        return true
+    end
+
     local cam = workspace.CurrentCamera
-    if not cam then return end
-    Cam.Active = true
+    if not cam then return false end
+
+    Cam.OriginalCameraType = cam.CameraType
+    Cam.OriginalCameraSubject = cam.CameraSubject
+    Cam.OriginalCameraCFrame = cam.CFrame
+    Cam.OriginalCameraFocus = cam.Focus
     Cam.Target = targetPlayer
-    Cam.Rotation = Vector2.new(0, 0)
-    Cam.Distance = 12
-    local tpos = Cam.targetPos() or Vector3.new(0, 10, 0)
-    Cam.Position = tpos + Vector3.new(0, 5, 0)
-    pcall(function()
-        local camScript = LP.PlayerScripts:FindFirstChild("PlayerModule")
-        if camScript then
-            local camModule = require(camScript)
-            local controls = camModule:GetControls()
-            if controls then controls:Disable() end
-        end
-    end)
-    local mm = UserInputService.InputChanged:Connect(function(input)
-        if not Cam.Active then return end
-        if input.UserInputType == Enum.UserInputType.MouseMovement then
-            Cam.Rotation = Cam.Rotation + Vector2.new(-input.Delta.X * 0.4, -input.Delta.Y * 0.4)
-        elseif input.UserInputType == Enum.UserInputType.Touch then
-            Cam.Rotation = Cam.Rotation + Vector2.new(-input.Delta.X * 0.6, -input.Delta.Y * 0.6)
-        end
-    end)
-    table.insert(Cam.Connections, mm)
-    local mw = UserInputService.InputChanged:Connect(function(input)
-        if not Cam.Active then return end
-        if input.UserInputType == Enum.UserInputType.MouseWheel then
-            Cam.Distance = math.clamp(Cam.Distance - input.Position.Z * 2, 3, 60)
-        end
-    end)
-    table.insert(Cam.Connections, mw)
-    local rc = RunService.RenderStepped:Connect(function(dt)
-        if not Cam.Active then return end
-        local cam2 = workspace.CurrentCamera
-        if not cam2 then return end
-        local tpos = Cam.targetPos()
-        if tpos then
-            Cam.Position = Cam.Position:Lerp(tpos, math.min(dt * 12, 1))
-        end
-        local yaw = math.rad(Cam.Rotation.X)
-        local pitch = math.rad(math.clamp(Cam.Rotation.Y, -80, 80))
-        local offset = Vector3.new(math.sin(yaw) * math.cos(pitch), math.sin(pitch), math.cos(yaw) * math.cos(pitch)) * Cam.Distance
-        local camPos = Cam.Position + offset
-        cam2.CameraType = Enum.CameraType.Scriptable
-        cam2.CFrame = CFrame.new(camPos, Cam.Position)
-        cam2.Focus = CFrame.new(Cam.Position)
-    end)
-    table.insert(Cam.Connections, rc)
+    Cam.Active = true
+
+    pcall(function() RunService:UnbindFromRenderStep(Cam.BeforeCameraStep) end)
+    pcall(function() RunService:UnbindFromRenderStep(Cam.AfterCameraStep) end)
+    RunService:BindToRenderStep(
+        Cam.BeforeCameraStep,
+        Enum.RenderPriority.Camera.Value - 1,
+        Cam.maintainCamera
+    )
+    RunService:BindToRenderStep(
+        Cam.AfterCameraStep,
+        Enum.RenderPriority.Camera.Value + 1,
+        Cam.maintainCamera
+    )
+    Cam.maintainCamera()
+    return true
 end
 
 function Cam.stop()
     Cam.Active = false
-    Cam.Target = nil
-    for _, c in ipairs(Cam.Connections) do
-        pcall(function() c:Disconnect() end)
-    end
-    Cam.Connections = {}
-    pcall(function()
-        local camScript = LP.PlayerScripts:FindFirstChild("PlayerModule")
-        if camScript then
-            local camModule = require(camScript)
-            local controls = camModule:GetControls()
-            if controls then controls:Enable() end
-        end
-    end)
+    pcall(function() RunService:UnbindFromRenderStep(Cam.BeforeCameraStep) end)
+    pcall(function() RunService:UnbindFromRenderStep(Cam.AfterCameraStep) end)
+
     local cam = workspace.CurrentCamera
-    if cam and LP.Character then
-        local hum = LP.Character:FindFirstChildOfClass("Humanoid")
-        if hum then
-            cam.CameraType = Enum.CameraType.Custom
-            cam.CameraSubject = hum
+    if cam then
+        local subject = Cam.OriginalCameraSubject
+        if not subject or not subject.Parent then
+            local character = LP.Character
+            subject = character and character:FindFirstChildOfClass("Humanoid") or nil
         end
+        pcall(function()
+            cam.CameraType = Cam.OriginalCameraType or Enum.CameraType.Custom
+            if subject and subject.Parent then cam.CameraSubject = subject end
+            if Cam.OriginalCameraCFrame then cam.CFrame = Cam.OriginalCameraCFrame end
+            if Cam.OriginalCameraFocus then cam.Focus = Cam.OriginalCameraFocus end
+        end)
     end
+
+    Cam.Target = nil
+    Cam.OriginalCameraType = nil
+    Cam.OriginalCameraSubject = nil
+    Cam.OriginalCameraCFrame = nil
+    Cam.OriginalCameraFocus = nil
 end
 
 local Loops = {}
@@ -2776,7 +3667,7 @@ end
 function Loops.farm()
     task.spawn(function()
         while true do
-            if State.Farm and Config.FarmTeleportMode == "instant" then
+            if State.Farm and bypassSupported and Config.FarmTeleportMode == "instant" then
                 -- Instant mode already yields while teleporting/picking up, so use
                 -- a frame-sized idle yield instead of adding another 0.1 seconds.
                 Farm.tick()
@@ -2827,7 +3718,7 @@ end
 function Loops.pending()
     task.spawn(function()
         while true do
-            if State.Farm and Config.FarmTeleportMode == "instant" then
+            if State.Farm and bypassSupported and Config.FarmTeleportMode == "instant" then
                 RunService.Heartbeat:Wait()
             else
                 task.wait(.2)
@@ -2901,28 +3792,26 @@ end
 function Loops.spectate()
     task.spawn(function()
         while true do
-            task.wait(.3)
-            if State.Spectate and Cam.Active then
-                if not State.SelectedPlayer or not State.SelectedPlayer.Character then
-                    local hum = nil
-                    for _, plr in ipairs(Players:GetPlayers()) do
-                        if plr ~= LP and plr.Character then
-                            local h = plr.Character:FindFirstChildOfClass("Humanoid")
-                            if h and h.Health > 0 then
-                                State.SelectedPlayer = plr
-                                Cam.Target = plr
-                                hum = h
-                                break
-                            end
-                        end
+            task.wait(0.3)
+            if State.Spectate then
+                local target = State.SelectedPlayer
+                if not target or target == LP or not target.Parent then
+                    State.Spectate = false
+                    Cam.stop()
+                    local ui = _G.__PhantomRemadeUI
+                    local control = ui and ui.SpectateToggle
+                    if control and type(control.Set) == "function" then
+                        pcall(function() control:Set(false) end)
                     end
-                    if not hum then
-                        Cam.stop()
-                        State.Spectate = false
-                    end
+                elseif not Cam.Active or Cam.Target ~= target then
+                    Cam.start(target)
                 else
-                    Cam.Target = State.SelectedPlayer
+                    -- Keep spectating this exact player through respawns. Cam temporarily
+                    -- uses our own Humanoid if their character is between spawn states.
+                    Cam.maintainCamera()
                 end
+            elseif Cam.Active then
+                Cam.stop()
             end
         end
     end)
@@ -3070,11 +3959,16 @@ function PlayerInfo.setSelected(plr)
     if plr == LP or (plr and not plr.Parent) then plr = nil end
     State.SelectedPlayer = plr
     if State.Spectate then
-        if plr and plr.Character then
-            Cam.Target = plr
+        if plr then
+            Cam.start(plr)
         else
-            Cam.stop()
             State.Spectate = false
+            Cam.stop()
+            local ui = _G.__PhantomRemadeUI
+            local control = ui and ui.SpectateToggle
+            if control and type(control.Set) == "function" then
+                pcall(function() control:Set(false) end)
+            end
         end
     end
     local viewer = _G.__PhantomPlayerInfoViewer
@@ -5143,13 +6037,18 @@ FarmAutomation:Toggle({
 local FarmSettings = FarmTab:Section({Title = "Farm Filters", Side = "right"})
 FarmSettings:Dropdown({
     Title = "Teleport mode",
-    Desc = "Choose a teleportation mode",
+    Desc = bypassSupported and "Choose a teleportation mode." or "Instant is unavailable because this executor did not pass the bypass check. Tween is forced.",
     Icon = "zap",
-    Values = {"Tween", "Instant"},
-    Value = "Tween",
+    Values = bypassSupported and {"Instant", "Tween"} or {"Tween"},
+    Value = bypassSupported and "Instant" or "Tween",
     Multi = false,
     Callback = function(selected)
-        Config.FarmTeleportMode = (selected == "Instant") and "instant" or "tween"
+        if selected == "Instant" and not bypassSupported then
+            Config.FarmTeleportMode = "tween"
+            AirflowCompat:Notify({Title = "Instant unavailable", Content = "This executor did not pass the bypass check. Tween remains enabled.", Type = "Warning", Duration = 4})
+            return
+        end
+        Config.FarmTeleportMode = (selected == "Instant" and bypassSupported) and "instant" or "tween"
     end,
 })
 FarmSettings:Dropdown({
@@ -5179,6 +6078,26 @@ _G.__PhantomFarmItemViewer = FarmViewerSection:Viewer({
     Players = false,
     Height = 240,
     Float = false,
+    AutoRotate = true,
+    SpinSpeed = 0.7,
+    Interactive = true,
+    ShowTargetSelector = false,
+    ShowTargetSwitch = false,
+    ShowPreviousButton = false,
+    ShowNextButton = false,
+    ShowTargetDropdown = false,
+    ShowHint = false,
+    ShowToolStrip = false,
+    ShowZoomControls = false,
+    ShowZoomIn = false,
+    ShowZoomOut = false,
+    ShowPanToggle = false,
+    ShowRotateToggle = false,
+    ShowLockFacing = false,
+    ShowSpectate = false,
+    ShowResetView = false,
+    ShowPresets = false,
+    ShowFloatButton = false,
     Callback = function(target)
         if target then FarmItemViewerLastTarget = target end
     end,
@@ -7000,6 +7919,951 @@ Players.PlayerRemoving:Connect(function()
     end)
 end)
 
+-- Stand Models: catalog only actual live player StandMorph rigs.
+-- A selected rig is cloned as a local visual overlay on the local player's stand.
+if _G.__MethionStandModels then
+    _G.__MethionStandModels.AutoApplyRunning = false
+    if type(_G.__MethionStandModels.RestoreVisual) == "function" then
+        pcall(function() _G.__MethionStandModels.RestoreVisual() end)
+    end
+end
+_G.__MethionStandModels = {
+    Catalog = {},
+    CatalogByLabel = {},
+    Options = {},
+    Previewed = setmetatable({}, {__mode = "k"}),
+    SelectedModel = nil,
+    SelectedLabel = nil,
+    SelectedPlayer = nil,
+    UseVisual = false,
+    VisualClone = nil,
+    VisualConnection = nil,
+    VisualDescendantConnection = nil,
+    VisualNoclipConnection = nil,
+    AppliedStand = nil,
+    AutoApplyRunning = false,
+    AutoApplyLastTry = 0,
+    AutoApplyWaitingForStand = false,
+    AutoApplyWaitingForModel = false,
+    GhostCollisionGroup = nil,
+    GhostCollisionGroupReady = false,
+    JointMap = {},
+    HiddenProperties = {},
+    HiddenStand = nil,
+    RootToPivot = CFrame.new(),
+    PlayerModels = {},
+    PlayerNameInput = "",
+    SelectedKind = nil,
+}
+
+_G.__MethionStandModels.SetStatus = function(message)
+    local state = _G.__MethionStandModels
+    if state and state.Status and type(state.Status.SetDesc) == "function" then
+        pcall(function() state.Status:SetDesc(tostring(message or "")) end)
+    end
+end
+
+-- Hard no-collision layer for the visual replacement. CanCollide=false is always
+-- enforced as a fallback; the dedicated collision group also prevents contact
+-- if another script accidentally flips CanCollide back on.
+_G.__MethionStandModels.EnsureGhostCollisionGroup = function()
+    local state = _G.__MethionStandModels
+    if state.GhostCollisionGroupReady and state.GhostCollisionGroup then
+        return state.GhostCollisionGroup
+    end
+    local physics = PhysicsService
+    local groupName = "MethionStandNoCollision"
+    local groups = {}
+    local listed, currentGroups = pcall(function()
+        return physics:GetRegisteredCollisionGroups()
+    end)
+    if listed and type(currentGroups) == "table" then groups = currentGroups end
+
+    local exists = false
+    for _, group in ipairs(groups) do
+        local name = group.name or group.Name
+        if name == groupName then exists = true break end
+    end
+    if not exists then
+        pcall(function() physics:RegisterCollisionGroup(groupName) end)
+    end
+
+    local ok, registered = pcall(function()
+        return physics:GetRegisteredCollisionGroups()
+    end)
+    if ok and type(registered) == "table" then
+        for _, group in ipairs(registered) do
+            local other = group.name or group.Name
+            if type(other) == "string" and other ~= "" then
+                pcall(function() physics:CollisionGroupSetCollidable(groupName, other, false) end)
+            end
+        end
+    end
+
+    state.GhostCollisionGroup = groupName
+    state.GhostCollisionGroupReady = true
+    return groupName
+end
+
+_G.__MethionStandModels.MakeGhostPart = function(part)
+    if not part or not part:IsA("BasePart") then return end
+    local state = _G.__MethionStandModels
+    local groupName = state.GhostCollisionGroup or _G.__MethionStandModels.EnsureGhostCollisionGroup()
+    pcall(function() part.CanCollide = false end)
+    pcall(function() part.CanTouch = false end)
+    pcall(function() part.CanQuery = false end)
+    pcall(function() part.Massless = true end)
+    if groupName then pcall(function() part.CollisionGroup = groupName end) end
+end
+
+_G.__MethionStandModels.MakeModelNoCollision = function(model)
+    if not model then return end
+    _G.__MethionStandModels.EnsureGhostCollisionGroup()
+    for _, object in ipairs(model:GetDescendants()) do
+        if object:IsA("BasePart") then
+            _G.__MethionStandModels.MakeGhostPart(object)
+        end
+    end
+end
+
+_G.__MethionStandModels.GetLocalStand = function()
+    local state = _G.__MethionStandModels
+    local stand
+    pcall(function() stand = getStandMorph() end)
+    if stand and stand:IsA("Model") then return stand end
+    local character = LP.Character
+    stand = character and character:FindFirstChild("StandMorph", true)
+    if stand and stand:IsA("Model") then return stand end
+    local living = workspace:FindFirstChild("Living")
+    local livingCharacter = living and living:FindFirstChild(LP.Name)
+    stand = livingCharacter and livingCharacter:FindFirstChild("StandMorph", true)
+    if stand and stand:IsA("Model") then return stand end
+    return nil
+end
+
+_G.__MethionStandModels.IsLocalStandActive = function(stand)
+    if not stand or not stand:IsA("Model") or not stand.Parent or not stand:IsDescendantOf(workspace) then
+        return false
+    end
+    local character = LP.Character
+    local summoned = character and character:FindFirstChild("SummonedStand")
+    if summoned then
+        local ok, value = pcall(function() return summoned.Value end)
+        if ok and (value == false or value == nil) then
+            return false
+        end
+    end
+    return true
+end
+
+_G.__MethionStandModels.GetPlayerStand = function(player)
+    if not player then return nil end
+    local living = workspace:FindFirstChild("Living")
+    local livingCharacter = living and living:FindFirstChild(player.Name)
+    local candidates = {}
+    if livingCharacter then table.insert(candidates, livingCharacter) end
+    if player.Character then table.insert(candidates, player.Character) end
+    for _, character in ipairs(candidates) do
+        if character then
+            local stand = character:FindFirstChild("StandMorph")
+            if not (stand and stand:IsA("Model")) then
+                stand = character:FindFirstChild("StandMorph", true)
+            end
+            if stand and stand:IsA("Model") and stand:FindFirstChildWhichIsA("BasePart", true) then
+                return stand
+            end
+        end
+    end
+    return nil
+end
+
+_G.__MethionStandModels.ReadModelHint = function(model, hint)
+    if not model then return nil end
+    local lowerHint = string.lower(hint)
+    local function useful(value)
+        if value == nil then return nil end
+        local text = tostring(value)
+        if text == "" or text == "false" or text == "0" then return nil end
+        if tonumber(text) then return nil end
+        return text
+    end
+    local ok, attributes = pcall(function() return model:GetAttributes() end)
+    if ok then
+        for key, value in pairs(attributes) do
+            if string.find(string.lower(tostring(key)), lowerHint, 1, true) then
+                local result = useful(value)
+                if result then return result end
+            end
+        end
+    end
+    for _, object in ipairs(model:GetDescendants()) do
+        if object:IsA("ValueBase") and string.find(string.lower(object.Name), lowerHint, 1, true) then
+            local okValue, value = pcall(function() return object.Value end)
+            if okValue then
+                local result = useful(value)
+                if result then return result end
+            end
+        end
+    end
+    return nil
+end
+
+_G.__MethionStandModels.GetStandLabel = function(player, stand)
+    local stats = player and player:FindFirstChild("PlayerStats")
+    local standValue = stats and stats:FindFirstChild("Stand")
+    local standName = standValue and tostring(standValue.Value) or "Stand"
+    local skin = _G.__MethionStandModels.ReadModelHint(stand, "skin")
+        or _G.__MethionStandModels.ReadModelHint(stand, "variant")
+        or _G.__MethionStandModels.ReadModelHint(stand, "form")
+    if skin and string.lower(skin) ~= string.lower(standName) then
+        return player.Name .. "  |  " .. standName .. "  |  " .. skin
+    end
+    return player.Name .. "  |  " .. standName
+end
+
+_G.__MethionStandModels.RestoreHiddenParts = function()
+    local state = _G.__MethionStandModels
+    if not state then return end
+    for object, saved in pairs(state.HiddenProperties or {}) do
+        if object and object.Parent and saved then
+            pcall(function()
+                if saved.Property == "LocalTransparencyModifier" then
+                    object.LocalTransparencyModifier = saved.Value
+                elseif saved.Property == "Enabled" then
+                    object.Enabled = saved.Value
+                end
+                if saved.CanCollide ~= nil then
+                    object.CanCollide = saved.CanCollide
+                end
+            end)
+        end
+    end
+    state.HiddenProperties = {}
+    state.HiddenStand = nil
+end
+
+_G.__MethionStandModels.HideOriginalStand = function(stand)
+    local state = _G.__MethionStandModels
+    if not state or not stand or not stand.Parent then return end
+    state.HiddenStand = stand
+    for _, object in ipairs(stand:GetDescendants()) do
+        if object:IsA("BasePart") then
+            local saved = state.HiddenProperties[object]
+            if saved == nil then
+                saved = {
+                    Property = "LocalTransparencyModifier",
+                    Value = object.LocalTransparencyModifier,
+                }
+                state.HiddenProperties[object] = saved
+            end
+            if saved.CanCollide == nil then
+                saved.CanCollide = object.CanCollide
+            end
+            pcall(function()
+                object.LocalTransparencyModifier = 1
+                object.CanCollide = false
+            end)
+        elseif object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam") then
+            if state.HiddenProperties[object] == nil then
+                state.HiddenProperties[object] = {Property = "Enabled", Value = object.Enabled}
+            end
+            pcall(function() object.Enabled = false end)
+        end
+    end
+end
+
+_G.__MethionStandModels.RestoreVisual = function(keepToggleState, preserveHiddenStand)
+    local state = _G.__MethionStandModels
+    if not state then return end
+    if state.VisualConnection then
+        pcall(function() state.VisualConnection:Disconnect() end)
+        state.VisualConnection = nil
+    end
+    if state.VisualDescendantConnection then
+        pcall(function() state.VisualDescendantConnection:Disconnect() end)
+        state.VisualDescendantConnection = nil
+    end
+    if state.VisualNoclipConnection then
+        pcall(function() state.VisualNoclipConnection:Disconnect() end)
+        state.VisualNoclipConnection = nil
+    end
+    if state.VisualClone then
+        pcall(function() state.VisualClone:Destroy() end)
+        state.VisualClone = nil
+    end
+    state.JointMap = {}
+    state.AppliedStand = nil
+    if preserveHiddenStand and state.HiddenStand and state.HiddenStand.Parent then
+        -- During a model swap, keep the original stand hidden and non-collidable.
+        -- Restoring its original collision here for even one frame can shove the player.
+        _G.__MethionStandModels.HideOriginalStand(state.HiddenStand)
+    else
+        _G.__MethionStandModels.RestoreHiddenParts()
+    end
+    if not keepToggleState then state.UseVisual = false end
+end
+
+_G.__MethionStandModels.SelectModel = function(label)
+    local state = _G.__MethionStandModels
+    if not state then return end
+    local entry = state.CatalogByLabel[tostring(label or "")]
+    if type(entry) ~= "table" then return end
+    local model = entry.Model
+    if not model or not model.Parent then
+        _G.__MethionStandModels.SetStatus("That player's model disappeared. Refresh Skins and select another model.")
+        return
+    end
+    state.SelectedLabel = tostring(label)
+    state.SelectedModel = model
+    state.SelectedPlayer = entry.Player
+    state.SelectedKind = entry.Kind or "Stand"
+    if state.SelectedKind == "Character" then
+        _G.__MethionStandModels.SetStatus("Selected Roblox character " .. state.SelectedLabel .. ". This loads the account avatar even when offline; it is not the player's private YBA stand skin. Animation retargeting depends on compatible joints.")
+    else
+        _G.__MethionStandModels.SetStatus("Selected " .. state.SelectedLabel .. ". This player's visible StandMorph provides the appearance only; your own stand animation drives the replacement.")
+    end
+
+    local viewer = state.Viewer
+    if viewer then
+        local ok = pcall(function()
+            if type(viewer.Clear) == "function" then
+                viewer:Clear()
+            end
+            if type(viewer.Add) == "function" then
+                viewer:Add(model, state.SelectedLabel, true)
+            elseif type(viewer.Set) == "function" then
+                viewer:Set(model, state.SelectedLabel)
+            else
+                error("Viewer does not expose Add or Set")
+            end
+            if type(viewer.SetAutoRotate) == "function" then
+                viewer:SetAutoRotate(true)
+            end
+            if type(viewer.Refresh) == "function" then
+                viewer:Refresh()
+            end
+        end)
+        if ok then
+            state.Previewed[model] = true
+        else
+            _G.__MethionStandModels.SetStatus("Selected the model, but the live preview could not load it. Try Refresh Skins or load the username again.")
+        end
+    end
+    if state.UseVisual then
+        if type(state.StartAutoApply) == "function" then
+            state.StartAutoApply()
+        end
+        local applied, result = pcall(function() return _G.__MethionStandModels.ApplyVisual(true) end)
+        if not applied or result ~= true then
+            _G.__MethionStandModels.SetStatus("Could not apply selected stand: " .. tostring(result or "source unavailable"))
+        end
+    end
+end
+
+_G.__MethionStandModels.ApplyVisual = function(keepToggleState)
+    local state = _G.__MethionStandModels
+    if not state then return false end
+    local replacingActiveVisual = state.UseVisual == true and state.VisualClone ~= nil
+    _G.__MethionStandModels.RestoreVisual(true, replacingActiveVisual)
+
+    local function abortApply(message)
+        -- Keep the user's request enabled. A model or stand may simply not be ready yet;
+        -- the auto-apply watcher will retry when both become available.
+        if keepToggleState == true or state.UseVisual == true then
+            state.UseVisual = true
+        end
+        _G.__MethionStandModels.RestoreVisual(true)
+        _G.__MethionStandModels.SetStatus(message)
+        return false
+    end
+
+    local source = state.SelectedModel
+    local stand = _G.__MethionStandModels.GetLocalStand()
+    local standRoot = stand and (stand:FindFirstChild("HumanoidRootPart", true) or stand.PrimaryPart or stand:FindFirstChildWhichIsA("BasePart", true))
+    if not source or not source.Parent then
+        return abortApply("Choose a player's active stand from the dropdown first, then enable Use this model.")
+    end
+    if not stand or not standRoot or not _G.__MethionStandModels.IsLocalStandActive(stand) then
+        return abortApply("Use this model is enabled. Summon your stand to apply the selected model; it will apply automatically when your stand is equipped.")
+    end
+
+    local wasArchivable = source.Archivable
+    local clone
+    local cloneOk = pcall(function()
+        source.Archivable = true
+        clone = source:Clone()
+    end)
+    pcall(function() source.Archivable = wasArchivable end)
+    if not cloneOk or not clone or not clone:IsA("Model") then
+        if clone then pcall(function() clone:Destroy() end) end
+        return abortApply("Could not clone that player's stand. Refresh and select a different active stand.")
+    end
+
+    for _, object in ipairs(clone:GetDescendants()) do
+        if object:IsA("Script") or object:IsA("LocalScript") or object:IsA("ModuleScript")
+            or object:IsA("RemoteEvent") or object:IsA("RemoteFunction")
+            or object:IsA("BindableEvent") or object:IsA("BindableFunction")
+            or object:IsA("ProximityPrompt") or object:IsA("ClickDetector") then
+            pcall(function() object:Destroy() end)
+        end
+    end
+
+    local cloneRoot = clone:FindFirstChild("HumanoidRootPart", true) or clone.PrimaryPart
+        or clone:FindFirstChildWhichIsA("BasePart", true)
+    if not cloneRoot then
+        pcall(function() clone:Destroy() end)
+        return abortApply("The selected live stand has no usable root part, so it cannot be aligned to yours.")
+    end
+
+    -- Retarget the LOCAL player's current stand pose onto the selected model.
+    -- The selected player's model supplies only the appearance; every Motor6D/Bone
+    -- transform comes from the local player's own StandMorph, so its animations win.
+    local function relativePath(rootModel, object)
+        local path = {}
+        local current = object
+        while current and current ~= rootModel do
+            table.insert(path, 1, current.Name)
+            current = current.Parent
+        end
+        return table.concat(path, "\31")
+    end
+
+    local localJointsByPath = {}
+    local localJointsByName = {}
+    for _, object in ipairs(stand:GetDescendants()) do
+        if object:IsA("Motor6D") or object:IsA("Bone") then
+            localJointsByPath[relativePath(stand, object)] = object
+            localJointsByName[object.Name] = localJointsByName[object.Name] or {}
+            table.insert(localJointsByName[object.Name], object)
+        end
+    end
+
+    local jointMap = {}
+    local usedLocalJoints = {}
+    for _, object in ipairs(clone:GetDescendants()) do
+        if object:IsA("Motor6D") or object:IsA("Bone") then
+            local original = localJointsByPath[relativePath(clone, object)]
+            if not original or original.ClassName ~= object.ClassName or usedLocalJoints[original] then
+                original = nil
+                for _, candidate in ipairs(localJointsByName[object.Name] or {}) do
+                    if candidate.ClassName == object.ClassName and not usedLocalJoints[candidate] then
+                        original = candidate
+                        break
+                    end
+                end
+            end
+            if original then
+                usedLocalJoints[original] = true
+                table.insert(jointMap, {Source = original, Clone = object})
+            end
+        end
+    end
+
+    -- Keep the model's connected rig attached to its root while allowing its
+    -- Motor6Ds/Bones to pose the limbs. Only detached decorative pieces stay anchored.
+    local connectedParts = {}
+    local adjacency = {}
+    local function linkParts(a, b)
+        if not (a and b and a:IsA("BasePart") and b:IsA("BasePart")) then return end
+        adjacency[a] = adjacency[a] or {}
+        adjacency[b] = adjacency[b] or {}
+        table.insert(adjacency[a], b)
+        table.insert(adjacency[b], a)
+    end
+    for _, object in ipairs(clone:GetDescendants()) do
+        if object:IsA("JointInstance") or object:IsA("WeldConstraint") then
+            pcall(function() linkParts(object.Part0, object.Part1) end)
+        elseif object:IsA("Constraint") then
+            pcall(function()
+                local a = object.Attachment0
+                local b = object.Attachment1
+                linkParts(a and a.Parent, b and b.Parent)
+            end)
+        end
+    end
+    local queue = {cloneRoot}
+    connectedParts[cloneRoot] = true
+    local queueIndex = 1
+    while queueIndex <= #queue do
+        local part = queue[queueIndex]
+        queueIndex += 1
+        for _, connected in ipairs(adjacency[part] or {}) do
+            if not connectedParts[connected] then
+                connectedParts[connected] = true
+                table.insert(queue, connected)
+            end
+        end
+    end
+
+    local rootToPivot = cloneRoot.CFrame:ToObjectSpace(clone:GetPivot())
+    clone.Name = "MethionLocalStandModel"
+    pcall(function() clone:SetAttribute("MethionVisualStandModel", true) end)
+
+    -- Hard-noclip every body part and accessory BEFORE the rig enters Workspace.
+    -- A dedicated non-colliding group backs up CanCollide=false if another script
+    -- changes a part's flag while the avatar is being swapped.
+    local ghostGroup = _G.__MethionStandModels.EnsureGhostCollisionGroup()
+    for _, object in ipairs(clone:GetDescendants()) do
+        if object:IsA("BasePart") then
+            _G.__MethionStandModels.MakeGhostPart(object)
+            pcall(function()
+                if ghostGroup then object.CollisionGroup = ghostGroup end
+                object.Anchored = (object == cloneRoot) or not connectedParts[object]
+                object.LocalTransparencyModifier = 0
+            end)
+        elseif object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam") then
+            pcall(function() object.Enabled = false end)
+        end
+    end
+
+    state.VisualClone = clone
+    state.AppliedStand = stand
+    state.VisualConnection = nil
+    state.JointMap = jointMap
+    state.RootToPivot = rootToPivot
+    state.UseVisual = true
+    state.VisualDescendantConnection = clone.DescendantAdded:Connect(function(object)
+        if object:IsA("BasePart") then
+            _G.__MethionStandModels.MakeGhostPart(object)
+        end
+    end)
+    _G.__MethionStandModels.HideOriginalStand(stand)
+    clone.Parent = workspace
+    _G.__MethionStandModels.MakeModelNoCollision(clone)
+    pcall(function() clone:PivotTo(standRoot.CFrame * rootToPivot) end)
+
+    -- Reassert no-collision immediately before each physics simulation. This also
+    -- catches accessory/body parts inserted after loading and protects model swaps.
+    state.VisualNoclipConnection = RunService.Stepped:Connect(function()
+        if not state.UseVisual or not state.VisualClone or not state.VisualClone.Parent then return end
+        _G.__MethionStandModels.MakeModelNoCollision(state.VisualClone)
+        if state.HiddenStand and state.HiddenStand.Parent then
+            for _, object in ipairs(state.HiddenStand:GetDescendants()) do
+                if object:IsA("BasePart") then
+                    pcall(function() object.CanCollide = false end)
+                end
+            end
+        end
+    end)
+
+    state.VisualConnection = RunService.RenderStepped:Connect(function()
+        if not state.UseVisual or not state.VisualClone or not state.VisualClone.Parent then return end
+
+        -- Copy YOUR live stand's animated pose onto the selected skin/model.
+        -- Do not read animation transforms from the other player after cloning.
+        for _, pair in ipairs(state.JointMap or {}) do
+            local sourceJoint = pair.Source
+            local cloneJoint = pair.Clone
+            if sourceJoint and sourceJoint.Parent and cloneJoint and cloneJoint.Parent then
+                pcall(function() cloneJoint.Transform = sourceJoint.Transform end)
+            end
+        end
+
+        local currentStand = _G.__MethionStandModels.GetLocalStand()
+        local currentRoot = currentStand and (currentStand:FindFirstChild("HumanoidRootPart", true) or currentStand.PrimaryPart or currentStand:FindFirstChildWhichIsA("BasePart", true))
+        if not currentStand or not currentRoot or not _G.__MethionStandModels.IsLocalStandActive(currentStand) then
+            -- Remove the temporary overlay, but keep Use this model enabled so it can
+            -- be restored automatically when the player summons their stand again.
+            _G.__MethionStandModels.RestoreVisual(true)
+            state.AutoApplyWaitingForStand = true
+            _G.__MethionStandModels.SetStatus("Use this model is still enabled. Summon your stand and the selected model will apply automatically.")
+            return
+        end
+        if currentStand ~= state.AppliedStand then
+            -- The active stand instance changed. Restore the old one before attaching to
+            -- the new instance, without changing the user's toggle preference.
+            _G.__MethionStandModels.RestoreVisual(true)
+            state.AutoApplyWaitingForStand = false
+            _G.__MethionStandModels.SetStatus("Your stand changed. Reapplying the selected model automatically...")
+            return
+        end
+        _G.__MethionStandModels.HideOriginalStand(currentStand)
+        pcall(function() state.VisualClone:PivotTo(currentRoot.CFrame * state.RootToPivot) end)
+    end)
+    local sourceName = tostring(state.SelectedLabel or "selected model")
+    if state.SelectedKind == "Character" then
+        _G.__MethionStandModels.SetStatus("Applied " .. sourceName .. " as a local visual. Use this model stays enabled and will automatically reapply when you summon your stand again; avatar-to-stand animation matching depends on compatible joints.")
+    else
+        _G.__MethionStandModels.SetStatus("Applied " .. sourceName .. " as a local appearance. Use this model stays enabled and will automatically reapply when you summon your stand again. Your own stand animation drives the replacement.")
+    end
+    return true
+end
+
+_G.__MethionStandModels.StartAutoApply = function()
+    local state = _G.__MethionStandModels
+    if not state or state.AutoApplyRunning then return end
+    state.AutoApplyRunning = true
+
+    task.spawn(function()
+        while state and state.AutoApplyRunning do
+            if state.UseVisual then
+                local source = state.SelectedModel
+                local stand = _G.__MethionStandModels.GetLocalStand()
+                local root = stand and (stand:FindFirstChild("HumanoidRootPart", true) or stand.PrimaryPart or stand:FindFirstChildWhichIsA("BasePart", true))
+                local standReady = stand and root and _G.__MethionStandModels.IsLocalStandActive(stand)
+                local visualReady = state.VisualClone and state.VisualClone.Parent and standReady and state.AppliedStand == stand
+
+                if visualReady then
+                    state.AutoApplyWaitingForStand = false
+                    state.AutoApplyWaitingForModel = false
+                else
+                    if state.VisualClone and state.VisualClone.Parent then
+                        -- Do not keep an old stand hidden if a new stand instance appeared.
+                        _G.__MethionStandModels.RestoreVisual(true)
+                    end
+
+                    if not standReady then
+                        state.AutoApplyWaitingForModel = false
+                        if not state.AutoApplyWaitingForStand then
+                            state.AutoApplyWaitingForStand = true
+                            _G.__MethionStandModels.SetStatus("Use this model is enabled. Summon your stand and the selected model will apply automatically.")
+                        end
+                    elseif not source or not source.Parent then
+                        state.AutoApplyWaitingForStand = false
+                        if not state.AutoApplyWaitingForModel then
+                            state.AutoApplyWaitingForModel = true
+                            _G.__MethionStandModels.SetStatus("Use this model is enabled. Select a skin or load a player's username and it will apply automatically.")
+                        end
+                    elseif tick() - (state.AutoApplyLastTry or 0) >= 1 then
+                        state.AutoApplyWaitingForStand = false
+                        state.AutoApplyWaitingForModel = false
+                        state.AutoApplyLastTry = tick()
+                        local ok, result = pcall(function()
+                            return _G.__MethionStandModels.ApplyVisual(true)
+                        end)
+                        if not ok then
+                            _G.__MethionStandModels.SetStatus("Automatic skin application failed and will retry: " .. tostring(result))
+                        end
+                    end
+                end
+            else
+                state.AutoApplyWaitingForStand = false
+                state.AutoApplyWaitingForModel = false
+            end
+            task.wait(0.25)
+        end
+    end)
+end
+
+_G.__MethionStandModels.Scan = function()
+    local state = _G.__MethionStandModels
+    state.Catalog = {}
+    state.CatalogByLabel = {}
+    state.Options = {}
+    state.SelectedModel = nil
+    state.SelectedPlayer = nil
+
+    -- YBA's reusable model library is not reliably replicated as discoverable assets.
+    -- Build the dropdown only from StandMorph models currently worn by online players.
+    local seenModels = {}
+    for _, player in ipairs(Players:GetPlayers()) do
+        local stand = _G.__MethionStandModels.GetPlayerStand(player)
+        if stand and not seenModels[stand] then
+            local label = _G.__MethionStandModels.GetStandLabel(player, stand)
+            local baseLabel, suffix = label, 2
+            while state.CatalogByLabel[label] do
+                label = baseLabel .. " [" .. tostring(suffix) .. "]"
+                suffix += 1
+            end
+            seenModels[stand] = true
+            state.Catalog[stand] = label
+            state.CatalogByLabel[label] = {Model = stand, Player = player, Kind = "Stand"}
+            table.insert(state.Options, label)
+        end
+    end
+
+    for label, entry in pairs(state.PlayerModels or {}) do
+        if entry and entry.Model and entry.Model.Parent then
+            state.Catalog[entry.Model] = label
+            state.CatalogByLabel[label] = {Model = entry.Model, Player = entry.Player, Kind = "Character", UserId = entry.UserId}
+            table.insert(state.Options, label)
+        end
+    end
+
+    table.sort(state.Options, function(a, b) return string.lower(a) < string.lower(b) end)
+    if state.Dropdown and type(state.Dropdown.Refresh) == "function" then
+        pcall(function()
+            state.Dropdown:Refresh(#state.Options > 0 and state.Options or {"No active player skins found"}, true)
+        end)
+    end
+    if #state.Options == 0 then
+        _G.__MethionStandModels.SetStatus("No models found yet. Refresh skins or load a Roblox username in the Player Character section. Offline characters can load from their public Roblox avatar, but their private YBA stand model cannot be retrieved while offline.")
+        return 0
+    end
+
+    local localStand = _G.__MethionStandModels.GetLocalStand()
+    local preferred
+    if localStand then
+        for label, entry in pairs(state.CatalogByLabel) do
+            if entry.Model == localStand then preferred = label break end
+        end
+    end
+    preferred = preferred or state.Options[1]
+    if state.Dropdown and type(state.Dropdown.Set) == "function" then
+        pcall(function() state.Dropdown:Set(preferred) end)
+    end
+    _G.__MethionStandModels.SelectModel(preferred)
+    _G.__MethionStandModels.SetStatus("Found " .. tostring(#state.Options) .. " model(s), including active player skins and any loaded Roblox character avatars. Offline avatar entries persist across refreshes for this session.")
+    return #state.Options
+end
+
+_G.__MethionStandModels.LoadPlayerCharacter = function(username)
+    local state = _G.__MethionStandModels
+    username = tostring(username or state.PlayerNameInput or ""):gsub("^%s*(.-)%s*$", "%1")
+    if username == "" then
+        _G.__MethionStandModels.SetStatus("Enter a Roblox username first.")
+        return false, "empty username"
+    end
+    _G.__MethionStandModels.SetStatus("Loading Roblox avatar for @" .. username .. "... This may also work when the account is offline.")
+
+    local userId
+    local idOk, idResult = pcall(function()
+        return Players:GetUserIdFromNameAsync(username)
+    end)
+    if not idOk or not tonumber(idResult) then
+        local message = "Could not resolve Roblox username @" .. username .. ". Check the exact username and try again."
+        _G.__MethionStandModels.SetStatus(message)
+        return false, message
+    end
+    userId = tonumber(idResult)
+
+    local description
+    local descriptionErrors = {}
+    for _, methodName in ipairs({"GetHumanoidDescriptionFromUserIdAsync", "GetHumanoidDescriptionFromUserId"}) do
+        local method
+        pcall(function() method = Players[methodName] end)
+        if type(method) == "function" then
+            local ok, result = pcall(function() return method(Players, userId) end)
+            if ok and result then
+                description = result
+                break
+            end
+            table.insert(descriptionErrors, tostring(result))
+        end
+    end
+
+    local model
+    if description then
+        for _, methodName in ipairs({"CreateHumanoidModelFromDescriptionAsync", "CreateHumanoidModelFromDescription"}) do
+            local method
+            pcall(function() method = Players[methodName] end)
+            if type(method) == "function" then
+                local ok, result = pcall(function()
+                    return method(Players, description, Enum.HumanoidRigType.R15)
+                end)
+                if ok and result and result:IsA("Model") then
+                    model = result
+                    break
+                end
+                table.insert(descriptionErrors, tostring(result))
+            end
+        end
+    end
+
+    -- Fallback for clients where the HumanoidDescription model APIs are restricted.
+    if not model then
+        local appearanceMethod
+        pcall(function() appearanceMethod = Players.GetCharacterAppearanceAsync end)
+        if type(appearanceMethod) == "function" then
+            local ok, result = pcall(function() return appearanceMethod(Players, userId) end)
+            if ok and result and result:IsA("Model") then
+                model = result
+            elseif not ok then
+                table.insert(descriptionErrors, tostring(result))
+            end
+        end
+    end
+
+    -- On the online case, fall back to a local clone of the player's currently replicated character.
+    local onlinePlayer = Players:GetPlayerByUserId(userId)
+    if not model and onlinePlayer and onlinePlayer.Character then
+        local character = onlinePlayer.Character
+        local wasArchivable = character.Archivable
+        pcall(function()
+            character.Archivable = true
+            model = character:Clone()
+        end)
+        pcall(function() character.Archivable = wasArchivable end)
+    end
+
+    if not model or not model:IsA("Model") then
+        local detail = #descriptionErrors > 0 and (" Details: " .. table.concat(descriptionErrors, " | ")) or ""
+        local message = "Roblox did not allow this client to create the avatar model for @" .. username .. "." .. detail .. " Private YBA stand models are only obtainable while replicated by the game."
+        _G.__MethionStandModels.SetStatus(message)
+        return false, message
+    end
+
+    local cache = ReplicatedStorage:FindFirstChild("MethionPlayerModelCache")
+    if not cache then
+        cache = Instance.new("Folder")
+        cache.Name = "MethionPlayerModelCache"
+        cache.Parent = ReplicatedStorage
+    end
+    local modelName = "MethionAvatar_" .. tostring(userId)
+    local oldModel = cache:FindFirstChild(modelName)
+    if oldModel then
+        -- The active visual is already a separate clone in Workspace. Keep it running
+        -- until SelectModel applies the freshly loaded source, avoiding a collision
+        -- restore / re-hide gap while reloading the same username.
+        pcall(function() oldModel:Destroy() end)
+    end
+    local modelRoot = model:FindFirstChild("HumanoidRootPart", true) or model:FindFirstChildWhichIsA("BasePart", true)
+    if modelRoot and modelRoot:IsA("BasePart") then
+        pcall(function() model.PrimaryPart = modelRoot end)
+        pcall(function() model:PivotTo(CFrame.new()) end)
+    end
+    model.Name = modelName
+    for _, object in ipairs(model:GetDescendants()) do
+        if object:IsA("Script") or object:IsA("LocalScript") or object:IsA("ModuleScript") then
+            pcall(function() object:Destroy() end)
+        elseif object:IsA("BasePart") then
+            _G.__MethionStandModels.MakeGhostPart(object)
+        end
+    end
+    _G.__MethionStandModels.MakeModelNoCollision(model)
+    model.Parent = cache
+
+    local displayName = username
+    pcall(function()
+        local ok, info = pcall(function() return Players:GetNameFromUserIdAsync(userId) end)
+        if ok and info then displayName = info end
+    end)
+    local label = "Character  |  " .. displayName .. "  |  " .. tostring(userId)
+    state.PlayerModels[label] = {Model = model, Player = onlinePlayer, UserId = userId, Username = username}
+    state.Options = state.Options or {}
+    if not table.find(state.Options, label) then table.insert(state.Options, label) end
+    table.sort(state.Options, function(a, b) return string.lower(a) < string.lower(b) end)
+    state.Catalog[model] = label
+    state.CatalogByLabel[label] = {Model = model, Player = onlinePlayer, Kind = "Character", UserId = userId}
+    if state.Dropdown and type(state.Dropdown.Refresh) == "function" then
+        pcall(function() state.Dropdown:Refresh(state.Options, true) end)
+    end
+    if state.Dropdown and type(state.Dropdown.Set) == "function" then
+        pcall(function() state.Dropdown:Set(label) end)
+    end
+    _G.__MethionStandModels.SelectModel(label)
+    _G.__MethionStandModels.SetStatus("Loaded Roblox character @" .. username .. " (userId " .. tostring(userId) .. "). This works for offline public avatars; it cannot recover their YBA-specific stand/skin unless the game replicates that stand model.")
+    return true, label
+end
+
+local function skinsNotify(title, content, kind)
+    pcall(function()
+        AirflowCompat:Notify({Title = title, Content = content, Type = kind or "Info", Duration = 4})
+    end)
+end
+
+_G.__MethionStandModels.Tab = Window:Tab({Title = "Skins", Icon = "user-round-cog", Desc = "Browse replicated skins or load public Roblox avatar models by username."})
+_G.__MethionStandModels.LibrarySection = _G.__MethionStandModels.Tab:Section({Title = "Skin Library", Side = "left"})
+_G.__MethionStandModels.ViewerSection = _G.__MethionStandModels.Tab:Section({Title = "Live Skin Preview", Side = "right"})
+_G.__MethionStandModels.LibrarySection:Paragraph({
+    Title = "Skins & Player Avatars",
+    Desc = "Live skins are read from replicated StandMorphs. To add any public Roblox avatar even when offline, enter the exact username below. An offline avatar is not the same as their private YBA stand skin.",
+})
+_G.__MethionStandModels.PlayerNameBox = _G.__MethionStandModels.LibrarySection:Input({
+    Title = "Player Username",
+    Desc = "Exact Roblox username, online or offline.",
+    Placeholder = "username",
+    Value = "",
+    Callback = function(value)
+        _G.__MethionStandModels.PlayerNameInput = tostring(value or "")
+    end,
+})
+_G.__MethionStandModels.LibrarySection:Button({
+    Title = "Load Player Character",
+    Desc = "Load a public Roblox avatar by username, including offline accounts. If Use this model is enabled, it applies automatically.",
+    Icon = "user-round-search",
+    Callback = function()
+        task.spawn(function()
+            local ok, result = pcall(function()
+                local success, detail = _G.__MethionStandModels.LoadPlayerCharacter(_G.__MethionStandModels.PlayerNameInput)
+                if not success then error(detail or "avatar load failed") end
+                return detail
+            end)
+            if ok then
+                skinsNotify("Skins", "Loaded player character model.", "Success")
+            else
+                _G.__MethionStandModels.SetStatus("Could not load player character: " .. tostring(result))
+                skinsNotify("Skins", "Could not load that Roblox avatar. Check username or client API access.", "Warning")
+            end
+        end)
+    end,
+})
+_G.__MethionStandModels.Status = _G.__MethionStandModels.LibrarySection:Paragraph({Title = "Scan status", Desc = "Refresh to find live stand skins, or load a Roblox character by username."})
+_G.__MethionStandModels.Dropdown = _G.__MethionStandModels.LibrarySection:Dropdown({
+    Title = "Skin / Player Avatar",
+    Desc = "Includes online players' replicated skins and Roblox character avatars loaded by username.",
+    Values = {"Press Refresh Skins"},
+    Value = "Press Refresh Skins",
+    Multi = false,
+    Callback = function(value)
+        _G.__MethionStandModels.SelectModel(value)
+    end,
+})
+_G.__MethionStandModels.LibrarySection:Button({
+    Title = "Refresh Skins",
+    Desc = "Scan online players for their current skins; previously loaded offline avatar models remain in the list.",
+    Icon = "refresh-cw",
+    Callback = function()
+        task.spawn(function()
+            local ok, count = pcall(function() return _G.__MethionStandModels.Scan() end)
+            if not ok then
+                _G.__MethionStandModels.SetStatus("Scan failed: " .. tostring(count))
+                skinsNotify("Skins", "Could not scan active player skins.", "Warning")
+            elseif count and count > 0 then
+                skinsNotify("Skins", "Found " .. tostring(count) .. " skin/avatar model(s).", "Success")
+            else
+                skinsNotify("Skins", "No models found. Load a username or wait for a player skin to replicate.", "Warning")
+            end
+        end)
+    end,
+})
+_G.__MethionStandModels.UseToggle = _G.__MethionStandModels.LibrarySection:Toggle({
+    Title = "Use this model",
+    Desc = "Overlay the selected model locally. It stays enabled while your stand is unequipped and reapplies when you summon it again. This is client-side only.",
+    Icon = "eye",
+    Value = false,
+    Callback = function(enabled)
+        _G.__MethionStandModels.UseVisual = enabled == true
+        if enabled then
+            _G.__MethionStandModels.StartAutoApply()
+            local ok, result = pcall(function() return _G.__MethionStandModels.ApplyVisual(true) end)
+            if not ok or result ~= true then
+                -- Stay toggled on; retry when the model/stand is available instead of
+                -- forcing the UI toggle off after a temporary failure or unequip.
+                _G.__MethionStandModels.UseVisual = true
+                _G.__MethionStandModels.StartAutoApply()
+                _G.__MethionStandModels.SetStatus("Use this model remains enabled. It will apply automatically when your selected model and summoned stand are available.")
+                skinsNotify("Skins", "Use this model stays enabled and will apply automatically when the selected model and stand are available.", "Info")
+            end
+        else
+            _G.__MethionStandModels.RestoreVisual(false)
+            _G.__MethionStandModels.SetStatus("Restored your original stand appearance locally.")
+        end
+    end,
+})
+_G.__MethionStandModels.ViewerStatus = _G.__MethionStandModels.ViewerSection:Paragraph({Title = "Selected skin / avatar", Desc = "Select a skin or load a Roblox avatar to preview it here."})
+_G.__MethionStandModels.Viewer = _G.__MethionStandModels.ViewerSection:Viewer({
+    Name = "Selected Skin / Avatar",
+    Desc = "Preview the selected stand skin or Roblox avatar.",
+    Players = false,
+    Height = 280,
+    Float = false,
+    AutoRotate = true,
+    SpinSpeed = 0.7,
+    Callback = function(target)
+        if target and typeof(target) == "Instance" then
+            pcall(function() _G.__MethionStandModels.ViewerStatus:SetDesc("Previewing: " .. tostring(_G.__MethionStandModels.SelectedLabel or target.Name)) end)
+        end
+    end,
+})
+if not _G.__MethionStandModels.Viewer then
+    _G.__MethionStandModels.ViewerStatus:SetDesc("The live viewer is unavailable in this Flow library version. The local visual replacement can still be used.")
+end
+task.spawn(function()
+    task.wait(0.5)
+    pcall(function() _G.__MethionStandModels.Scan() end)
+end)
+
 local TeleportsTab = Window:Tab({Title = "Teleports", Icon = "map-pin", Desc = "Landmarks, custom coordinates, and player travel."})
 _G.__PhantomRemadeUI = _G.__PhantomRemadeUI or {}
 
@@ -7023,12 +8887,17 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Dropdown({
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Dropdown({
     Title = "Travel Mode",
-    Desc = "Instant moves directly; Tween travels at the configured speed.",
-    Values = {"Instant", "Tween"},
+    Desc = bypassSupported and "Instant moves directly; Tween travels at the configured speed." or "Instant is unavailable because this executor did not pass the bypass check. Tween is forced.",
+    Values = bypassSupported and {"Instant", "Tween"} or {"Tween"},
     Value = Config.Teleport.Mode,
     Callback = function(selected)
+        if selected == "Instant" and not bypassSupported then
+            Config.Teleport.Mode = "Tween"
+            AirflowCompat:Notify({Title = "Instant unavailable", Content = "This executor did not pass the bypass check. Tween remains enabled.", Type = "Warning", Duration = 4})
+            return
+        end
         if selected == "Instant" or selected == "Tween" then
-            Config.Teleport.Mode = selected
+            Config.Teleport.Mode = selected == "Instant" and bypassSupported and "Instant" or "Tween"
         end
     end,
 })
@@ -7594,20 +9463,32 @@ _G.__PhantomRemadeUI.PlayerTargetSection:Button({
         end
     end,
 })
-_G.__PhantomRemadeUI.PlayerTargetSection:Toggle({
+_G.__PhantomRemadeUI.SpectateToggle = _G.__PhantomRemadeUI.PlayerTargetSection:Toggle({
     Title = "Spectate Target",
-    Desc = "Look around the selected player's character; toggle off to return.",
+    Desc = "Use Roblox's normal spectate camera for the selected player. It stays enabled through their respawn; toggle off to return.",
     Icon = "eye",
     Value = false,
     Callback = function(enabled)
-        State.Spectate = enabled
-        if enabled then
-            if not State.SelectedPlayer or not State.SelectedPlayer.Character then
+        State.Spectate = enabled == true
+        if State.Spectate then
+            local target = State.SelectedPlayer
+            if not target or target == LP or not target.Parent then
                 State.Spectate = false
-                AirflowCompat:Notify({Title = "Player Info", Content = "Select a player with a loaded character first.", Type = "Warning"})
+                Cam.stop()
+                task.defer(function()
+                    local control = _G.__PhantomRemadeUI and _G.__PhantomRemadeUI.SpectateToggle
+                    if control and type(control.Set) == "function" then
+                        pcall(function() control:Set(false) end)
+                    end
+                end)
+                AirflowCompat:Notify({Title = "Player Info", Content = "Select a player first.", Type = "Warning"})
                 return
             end
-            Cam.start(State.SelectedPlayer)
+            if not Cam.start(target) then
+                State.Spectate = false
+                Cam.stop()
+                AirflowCompat:Notify({Title = "Player Info", Content = "Could not start spectating that player.", Type = "Warning"})
+            end
         else
             Cam.stop()
         end
@@ -7730,11 +9611,11 @@ _G.__MethionSettingsSections.General:Toggle({
 _G.__MethionSettingsSections.Movement:Paragraph({Title = "Movement", Desc = "Tune farming tween movement and arrival timing."})
 _G.__MethionSettingsSections.Movement:Slider({
     Title = "Tween Speed",
-    Desc = "Speed of movement (studs/sec)",
+    Desc = "Constant travel speed in studs/sec for every distance. Farther trips take longer; speed does not scale with distance.",
     Icon = "gauge",
-    Value = {Min = 50, Max = 200, Default = 150},
+    Value = {Min = 10, Max = 500, Default = 220},
     Step = 5,
-    Callback = function(v) Config.TweenSpeed = v end,
+    Callback = function(v) Config.TweenSpeed = math.clamp(tonumber(v) or 220, 10, 500) end,
 })
 _G.__MethionSettingsSections.Movement:Slider({
     Title = "Instant Arrival Delay",
@@ -7743,6 +9624,27 @@ _G.__MethionSettingsSections.Movement:Slider({
     Value = {Min = 0.2, Max = 1.0, Default = 0.35},
     Step = 0.05,
     Callback = function(v) Config.InstantDelay = v end,
+})
+_G.__MethionSettingsSections.Movement:Paragraph({
+    Title = "Instant Visual Character",
+    Desc = "The local decoy follows your movement input and mirrors currently playing character animations. Its parts cannot collide with the real character or items.",
+})
+_G.__MethionSettingsSections.Movement:Toggle({
+    Title = "Boosted",
+    Desc = "Locks on every frame; verifies the full rig, waits 0.25s, then re-verifies before pickup. WARNING: may cause frequent kicks/disconnects. Instant mode only.",
+    Icon = "zap",
+    Value = false,
+    Callback = function(state)
+        Config.Boosted = state == true
+        if Config.Boosted then
+            AirflowCompat:Notify({
+                Title = "Boosted enabled",
+                Content = "Warning: Boosted may cause frequent kicks. Disable it if the server becomes unstable.",
+                Type = "Warning",
+                Duration = 5,
+            })
+        end
+    end,
 })
 _G.__MethionSettingsSections.Performance:Paragraph({Title = "Performance", Desc = "A one-time visual reduction for lower-end devices. Rejoin to restore the original visuals."})
 _G.__MethionSettingsSections.Performance:Button({
@@ -7850,7 +9752,7 @@ do
     aboutSection:Paragraph({Title = "Project", Desc = "Methion  |  Advanced YBA multi-functions script"})
     aboutSection:Paragraph({Title = "Version", Desc = "1.1"})
     aboutSection:Paragraph({Title = "Owner / Author", Desc = "Diablo"})
-    aboutSection:Paragraph({Title = "Interface and Lua Work", Desc = "Diablo"})
+    aboutSection:Paragraph({Title = "Interface and Lua Work", Desc = "azurey"})
     aboutSection:Paragraph({Title = "Usage Note", Desc = "Some functions rely on game objects and executor capabilities being available in the current session."})
 
     function dashboard:Refresh()
@@ -8178,6 +10080,9 @@ _G.__PhantomQuestFarmConfig = {
     disableNoclip = function()
         State.NoClip = false
     end,
+    isSelling = function()
+        return State.Selling == true
+    end,
     canStart = function()
         local env = type(getgenv) == "function" and getgenv() or _G
         return not State.Farm
@@ -8202,6 +10107,11 @@ _G.__PhantomQuestFarmOk, _G.__PhantomQuestFarmErr = pcall(function()
 return function(Window, player, QuestTab, config)
 	local enableNoclip = config.enableNoclip
 	local disableNoclip = config.disableNoclip
+	local function isSelling()
+		if type(config.isSelling) ~= "function" then return false end
+		local ok, value = pcall(config.isSelling)
+		return ok and value == true
+	end
 
 	local RunService = game:GetService("RunService")
 	local Players = game:GetService("Players")
@@ -8392,18 +10302,8 @@ return function(Window, player, QuestTab, config)
 		Message = "Quest Farm is ready.",
 		LastAcceptAttempt = 0,
 		LastAcceptQuest = nil,
-		AcceptRetryAt = 0,
-		AcceptFailureCount = 0,
 		LastTurnInAttempt = 0,
-		LastFailureNotice = 0,
-		LastStatusUpdate = 0,
-		LastRawQuest = "",
 		ActiveQuest = nil,
-		-- A completed quest's HUD card can linger after PlayerStats.CurrentQuest clears.
-		-- Remember the quest we just turned in so the stale card cannot lock the farm.
-		IgnoreHUDQuestName = nil,
-		IgnoreHUDUntil = 0,
-		LastTurnInClickAt = 0,
 		DialogueTarget = nil,
 		OverrideRequested = false,
 	}
@@ -8504,27 +10404,41 @@ return function(Window, player, QuestTab, config)
 		part.AssemblyAngularVelocity = Vector3.zero
 	end
 
+	local QuestStickState = _G.__MethionQuestStickState or {
+		Target = nil,
+		LastMoveAt = 0,
+		LastGoal = nil,
+	}
+	QuestStickState.LastGoal = nil
+	_G.__MethionQuestStickState = QuestStickState
+
 	local function stickFarmPartsToNPC(char, npc, handheld)
 		if not char or not npc or not npc.Parent then return end
 		local playerRoot = char:FindFirstChild("HumanoidRootPart")
 		local npcRoot = npc:FindFirstChild("HumanoidRootPart")
-		if not playerRoot or not npcRoot then return end
-		if handheld then
-			playerRoot.CFrame = npcRoot.CFrame
-			zeroFarmVelocity(playerRoot)
-			return
-		end
+		local humanoid = char:FindFirstChildWhichIsA("Humanoid")
+		if not playerRoot or not npcRoot or not humanoid or humanoid.Health <= 0 then return end
 
-		local backPosition = npcRoot.Position - npcRoot.CFrame.LookVector * 1.8
+		-- Mirror Auto Storyline's stick: position the actual player root directly
+		-- on every Heartbeat. Do not use MoveTo, which makes the character walk in.
+		local verticalOffset = handheld and 1.5 or (tonumber(FarmConfig.Distance) or -28)
+		local backOffset = handheld and 2.5 or 1.8
+		local follow = npcRoot.CFrame - npcRoot.CFrame.LookVector * backOffset
+		follow = follow + Vector3.new(0, verticalOffset, 0)
+		local targetCFrame = CFrame.lookAt(follow.Position, npcRoot.Position)
+
 		local stand = char:FindFirstChild("StandMorph")
 		local standRoot = stand and (stand.PrimaryPart or stand:FindFirstChild("HumanoidRootPart"))
-		if standRoot then
-			standRoot.CFrame = CFrame.lookAt(backPosition, npcRoot.Position)
+		if not handheld and standRoot then
+			-- Keep the stand behind the NPC at the NPC's height; the player's own
+			-- root keeps the proven stick position used by the current working fix.
+			local standFollow = npcRoot.CFrame - npcRoot.CFrame.LookVector * 2.5
+			standFollow = standFollow + Vector3.new(0, 1.5, 0)
+			standRoot.CFrame = CFrame.lookAt(standFollow.Position, npcRoot.Position)
 			zeroFarmVelocity(standRoot)
 		end
 
-		local undergroundPosition = Vector3.new(backPosition.X, npcRoot.Position.Y + FarmConfig.Distance, backPosition.Z)
-		playerRoot.CFrame = CFrame.lookAt(undergroundPosition, npcRoot.Position)
+		playerRoot.CFrame = targetCFrame
 		zeroFarmVelocity(playerRoot)
 	end
 
@@ -8719,36 +10633,8 @@ return function(Window, player, QuestTab, config)
 		return firstName, firstButton
 	end
 
-	local function driveQuestDialogue(NPC, mode, forceAccept)
-		if State.Selling or not NPC then return false end
-
-		-- Normal acceptance resumes an existing quest. A manual override is the
-		-- exception: deliberately open the selected giver so the server can switch
-		-- the quest if the game permits it.
-		if mode == "accept" and not forceAccept then
-			local stats = player and player:FindFirstChild("PlayerStats")
-			local currentQuestObject = stats and stats:FindFirstChild("CurrentQuest")
-			local progressObject = stats and stats:FindFirstChild("QuestProgress")
-			local maxObject = stats and stats:FindFirstChild("QuestMaxProgress")
-			local activeQuestName = currentQuestObject and tostring(currentQuestObject.Value or "") or ""
-			if activeQuestName ~= "" then
-				local progress = tonumber(progressObject and progressObject.Value) or 0
-				local maximum = tonumber(maxObject and maxObject.Value) or 0
-				if maximum > 0 and progress >= maximum then
-					getgenv().CompletedQuest = true
-					FarmState.CompletedQuest = true
-					return false
-				end
-				getgenv().CompletedQuest = false
-				FarmState.CompletedQuest = false
-				FarmState.CurrentQuest = activeQuestName
-				QuestRuntime.ActiveQuest = activeQuestName
-				-- Do not copy the server's current quest into SelectedQuest. That variable is
-				-- the user's manual target and must survive resume/turn-in operations.
-				return true
-			end
-		end
-
+	local function driveQuestDialogue(NPC, mode)
+		if isSelling() or not NPC then return false end
 		local dialogueNameObject = NPC:FindFirstChild("Dialogue")
 		local dialogueName = dialogueNameObject and tostring(dialogueNameObject.Value or "") or ""
 		if dialogueName == "" then return false end
@@ -8770,43 +10656,25 @@ return function(Window, player, QuestTab, config)
 		end
 
 		if gui then
-			-- Never click through a dialogue left open by a different quest giver. This
-			-- was allowing a Dracula turn-in screen to accept Dracula again instead of
-			-- the manually selected or level-best quest. Try the dialogue's skip/close
-			-- control once, then refuse to interact if it is still showing.
 			local trackedTarget = QuestRuntime.DialogueTarget
-			if trackedTarget and trackedTarget ~= NPC.Name then
-				if dismissPreviousDialogueOnce() then
-					QuestRuntime.DialogueTarget = nil
-					gui = nil
-				else
-					setQuestStatus("Waiting for previous dialogue", "The " .. tostring(trackedTarget) .. " dialogue is still open. It will not be used to accept " .. tostring(NPC.Name) .. ".")
-					return false
-				end
-			elseif trackedTarget == NPC.Name or questDialogueMatchesNPC(gui, NPC, dialogueName) then
+			if trackedTarget == NPC.Name or questDialogueMatchesNPC(gui, NPC, dialogueName) then
 				QuestRuntime.DialogueTarget = NPC.Name
 				opened = true
+			elseif dismissPreviousDialogueOnce() then
+				QuestRuntime.DialogueTarget = nil
+				gui = nil
 			else
-				if dismissPreviousDialogueOnce() then
-					QuestRuntime.DialogueTarget = nil
-					gui = nil
-				else
-					setQuestStatus("Waiting for previous dialogue", "A different or unidentified NPC dialogue is open. It will not be reused for " .. tostring(NPC.Name) .. ".")
-					return false
-				end
+				setQuestStatus("Waiting for dialogue", "Close the previous NPC dialogue, then Quest Farm can use " .. tostring(NPC.Name) .. ".")
+				return false
 			end
 		else
 			QuestRuntime.DialogueTarget = nil
 		end
 
-		if State.Selling then return false end
-
+		if isSelling() then return false end
 		if not opened and dialogueTemplate then
-			if State.Selling then return false end
 			QuestRuntime.DialogueTarget = NPC.Name
-			pcall(function()
-				remote:FireServer("PromptTriggered", dialogueTemplate)
-			end)
+			pcall(function() remote:FireServer("PromptTriggered", dialogueTemplate) end)
 			if QuestDialogueBridge.waitDialogue then
 				gui = QuestDialogueBridge.waitDialogue(3)
 				opened = gui ~= nil
@@ -8815,13 +10683,10 @@ return function(Window, player, QuestTab, config)
 		end
 
 		if not opened then
-			if State.Selling then return false end
+			if isSelling() then return false end
 			QuestRuntime.DialogueTarget = NPC.Name
 			pcall(function()
-				remote:FireServer("DialogueInteracted", {
-					DialogueName = dialogueName,
-					Speaker = NPC.Name,
-				})
+				remote:FireServer("DialogueInteracted", {DialogueName = dialogueName, Speaker = NPC.Name})
 			end)
 			if QuestDialogueBridge.waitDialogue then
 				gui = QuestDialogueBridge.waitDialogue(4)
@@ -8830,76 +10695,29 @@ return function(Window, player, QuestTab, config)
 			if not opened then QuestRuntime.DialogueTarget = nil end
 		end
 
-		if not opened then
-			return false
-		end
+		if not opened then return false end
 
 		local deadline = tick() + 12
 		local actionCount = 0
 		local clickedAny = false
 		local sawGui = false
-		local turnInInitialRaw = tostring((player:FindFirstChild("PlayerStats") and player.PlayerStats:FindFirstChild("CurrentQuest") and player.PlayerStats.CurrentQuest.Value) or "")
-		local turnInInitialProgress = tonumber((player:FindFirstChild("PlayerStats") and player.PlayerStats:FindFirstChild("QuestProgress") and player.PlayerStats.QuestProgress.Value) or 0) or 0
-		local turnInInitialMaximum = tonumber((player:FindFirstChild("PlayerStats") and player.PlayerStats:FindFirstChild("QuestMaxProgress") and player.PlayerStats.QuestMaxProgress.Value) or 0) or 0
-
-		local function turnInStateAdvanced()
-			if mode ~= "turnin" then return false end
-			local stats = player and player:FindFirstChild("PlayerStats")
-			local current = stats and stats:FindFirstChild("CurrentQuest")
-			local progressObject = stats and stats:FindFirstChild("QuestProgress")
-			local maximumObject = stats and stats:FindFirstChild("QuestMaxProgress")
-			local rawNow = current and tostring(current.Value or "") or ""
-			local progressNow = tonumber(progressObject and progressObject.Value) or 0
-			local maximumNow = tonumber(maximumObject and maximumObject.Value) or 0
-			if turnInInitialRaw ~= "" and (rawNow == "" or rawNow ~= turnInInitialRaw) then return true end
-			if turnInInitialMaximum > 0 and turnInInitialProgress >= turnInInitialMaximum then
-				if maximumNow < turnInInitialMaximum or (maximumNow > 0 and progressNow < maximumNow) then return true end
-			end
-			return false
-		end
 
 		while tick() < deadline and actionCount < 32 and FarmState.Active do
-			if State.Selling then return false end
-			if turnInStateAdvanced() then
-				if QuestDialogueBridge.currentDialogue and QuestDialogueBridge.currentDialogue() and QuestDialogueBridge.skipClick then
-					pcall(QuestDialogueBridge.skipClick)
-					task.wait(0.12)
-				end
-				if not (QuestDialogueBridge.currentDialogue and QuestDialogueBridge.currentDialogue()) and QuestRuntime.DialogueTarget == NPC.Name then
-					QuestRuntime.DialogueTarget = nil
-				end
-				return clickedAny
-			end
+			if isSelling() then return false end
 			gui = QuestDialogueBridge.currentDialogue and QuestDialogueBridge.currentDialogue()
 			if gui then
 				sawGui = true
 				local optionName, target = chooseQuestOption(gui, mode)
-
 				if target and optionName then
 					local clicked = false
-					if QuestDialogueBridge.click then
-						clicked = QuestDialogueBridge.click(target) == true
-					end
+					if QuestDialogueBridge.click then clicked = QuestDialogueBridge.click(target) == true end
 					if not clicked and QuestDialogueBridge.waitAndClickOption then
 						clicked = QuestDialogueBridge.waitAndClickOption(optionName, 0.8) == true
 					end
-
 					if clicked then
 						clickedAny = true
 						actionCount = actionCount + 1
 						task.wait(0.16)
-						if turnInStateAdvanced() then
-							-- A claimed quest may leave a follow-up option visible. Close/skip that
-							-- dialogue without selecting another option, then stop immediately.
-							if QuestDialogueBridge.currentDialogue and QuestDialogueBridge.currentDialogue() and QuestDialogueBridge.skipClick then
-								pcall(QuestDialogueBridge.skipClick)
-								task.wait(0.12)
-							end
-							if not (QuestDialogueBridge.currentDialogue and QuestDialogueBridge.currentDialogue()) and QuestRuntime.DialogueTarget == NPC.Name then
-								QuestRuntime.DialogueTarget = nil
-							end
-							return clickedAny
-						end
 					else
 						task.wait(0.08)
 					end
@@ -8913,9 +10731,8 @@ return function(Window, player, QuestTab, config)
 					task.wait(0.16)
 				end
 			elseif sawGui then
-				task.wait(0.25)
-				gui = QuestDialogueBridge.currentDialogue and QuestDialogueBridge.currentDialogue()
-				if not gui then
+				task.wait(0.2)
+				if not (QuestDialogueBridge.currentDialogue and QuestDialogueBridge.currentDialogue()) then
 					if QuestRuntime.DialogueTarget == NPC.Name then QuestRuntime.DialogueTarget = nil end
 					return clickedAny
 				end
@@ -8930,19 +10747,34 @@ return function(Window, player, QuestTab, config)
 		return clickedAny
 	end
 
-	local function GetQuest(NPC, forceAccept)
-		if not NPC then return false end
-		local ok = driveQuestDialogue(NPC, "accept", forceAccept == true)
-		if ok then
-			getgenv().CompletedQuest = false
-			FarmState.CompletedQuest = false
+	local function closeQuestDialogueIfOpen()
+		local bridge = QuestDialogueBridge
+		if bridge and bridge.currentDialogue and bridge.currentDialogue() and bridge.skipClick then
+			pcall(bridge.skipClick)
+			task.wait(0.08)
 		end
-		return ok
+	end
+
+	local function GetQuest(NPC)
+		if not NPC or isSelling() then return false end
+		local ok, interacted = pcall(driveQuestDialogue, NPC, "accept")
+		if not ok then
+			warn("[Quest Farm] Quest dialogue failed: " .. tostring(interacted))
+			return false
+		end
+		closeQuestDialogueIfOpen()
+		return interacted == true
 	end
 
 	local function TurnInQuest(NPC)
-		if not NPC then return false end
-		return driveQuestDialogue(NPC, "turnin")
+		if not NPC or isSelling() then return false end
+		local ok, interacted = pcall(driveQuestDialogue, NPC, "turnin")
+		if not ok then
+			warn("[Quest Farm] Turn-in dialogue failed: " .. tostring(interacted))
+			return false
+		end
+		closeQuestDialogueIfOpen()
+		return interacted == true
 	end
 
 	FarmUtil.GetQuest = GetQuest
@@ -9008,25 +10840,24 @@ return function(Window, player, QuestTab, config)
 		if not hrp then return end
 
 		FarmUtil.CurrentEnemy = enemy
-		startQuestNPCView(enemy)
-		local moneyConn
+		local progressConn
+		local questProgressAdvanced = false
 
 		local okKill = pcall(function()
 			local handheld = isHandheldMethod()
 			local lp = Players.LocalPlayer
-			local questProgressAdvanced = false
-
-			if lp.PlayerGui:FindFirstChild("HUD") then
-				local dropMoney = lp.PlayerGui.HUD:FindFirstChild("Main") and lp.PlayerGui.HUD.Main:FindFirstChild("DropMoney")
-				dropMoney = dropMoney and dropMoney:FindFirstChild("Money")
-				if dropMoney then
-					moneyConn = dropMoney.ChildAdded:Connect(function(child)
-						if tonumber(string.match(child.Name, "%d+")) then
-							questProgressAdvanced = true
-						end
-					end)
-				end
+			local stats = lp:FindFirstChild("PlayerStats")
+			local questProgress = stats and stats:FindFirstChild("QuestProgress")
+			local questProgressStart = tonumber(questProgress and questProgress.Value) or 0
+			if questProgress then
+				progressConn = questProgress:GetPropertyChangedSignal("Value"):Connect(function()
+					local currentProgress = tonumber(questProgress.Value) or 0
+					if currentProgress ~= questProgressStart then
+						questProgressAdvanced = true
+					end
+				end)
 			end
+
 
 			if not handheld then
 				FarmUtil.EquipStand()
@@ -9042,6 +10873,9 @@ return function(Window, player, QuestTab, config)
 				local currentEnemyHRP = enemy:FindFirstChild("HumanoidRootPart")
 				local h = enemy:FindFirstChild("Health")
 				if h and h.Value <= 0 then
+					-- Keep the current enemy as the stick/camera target briefly after death,
+					-- then let the main loop acquire the next NPC.
+					task.wait(0.25)
 					break
 				end
 				if questProgressAdvanced then
@@ -9084,13 +10918,11 @@ return function(Window, player, QuestTab, config)
 			end
 		end)
 
-		if moneyConn then
-			pcall(function() moneyConn:Disconnect() end)
-			moneyConn = nil
-		end
-
 		local bufUntil = tick() + (QuestRuntime.OverrideRequested and 0 or NPC_KILL_POST_BUFFER_SEC)
-		while FarmState.Active and not QuestRuntime.OverrideRequested and tick() < bufUntil do
+		while FarmState.Active and not FarmState.CompletedQuest and not questProgressAdvanced
+			and not QuestRuntime.OverrideRequested and tick() < bufUntil do
+			local currentHealth = enemy and enemy:FindFirstChild("Health")
+			if not enemy or not enemy.Parent or not currentHealth or currentHealth.Value <= 0 then break end
 			local char = Players.LocalPlayer.Character
 			local hum = char and char:FindFirstChildWhichIsA("Humanoid")
 			if hum and hum.Health > 0 then
@@ -9118,6 +10950,7 @@ return function(Window, player, QuestTab, config)
 			end
 		end
 
+		if progressConn then pcall(function() progressConn:Disconnect() end) end
 		stopQuestNPCView()
 		clearFocusCam(Players.LocalPlayer.Character)
 
@@ -9142,7 +10975,6 @@ return function(Window, player, QuestTab, config)
 		end
 		local part = getItemPart()
 		if not part then return false end
-		local oldCF = hrp.CFrame
 		local started = tick()
 		local lastPromptAt = 0
 		farmEnsureNoclip(char)
@@ -9162,10 +10994,8 @@ return function(Window, player, QuestTab, config)
 			end
 			task.wait(0.1)
 		end
-		task.wait(0.15)
-		pcall(function()
-			if hrp.Parent and FarmState.Active then hrp.CFrame = oldCF end
-		end)
+		-- Stay at the objective after collecting; returning to the saved pre-collect
+		-- CFrame made unsupported executors visibly bounce between two positions.
 		return not item.Parent
 	end
 
@@ -9173,12 +11003,10 @@ return function(Window, player, QuestTab, config)
 		["Officer Sam [Lvl. 1+]"] = { Enemy = "Thug" },
 		["Deputy Bertrude [Lvl. 10+]"] = { Enemy = "Corrupt Police" },
 		["Abbacchio's Partner [Lvl 15+]"] = { Enemy = "Alpha Thug" },
-		["Homeless Man Jill [Lvl. 15+]"] = { Item = "Gold Coin", Amount = 10 },
 		["Dracula [Lvl. 20+]"] = { Enemy = "Zombie Henchman" },
 		["William Zeppeli [Lvl. 25+]"] = { Enemy = "Vampire" },
 		["Doppio [Lvl. 30+]"] = { Enemy = "DIO" },
 		["DIO [Lvl. 35+]"] = { Enemy = "Jotaro" },
-		["Jotaro"] = { Enemy = "Heaven Ascension Dio" },
 	}
 
 	-- Keep the full quest catalog independent from which quest-giver models happen
@@ -9189,26 +11017,20 @@ return function(Window, player, QuestTab, config)
 		["Officer Sam [Lvl. 1+]"] = 1,
 		["Deputy Bertrude [Lvl. 10+]"] = 10,
 		["Abbacchio's Partner [Lvl 15+]"] = 15,
-		["Homeless Man Jill [Lvl. 15+]"] = 15,
 		["Dracula [Lvl. 20+]"] = 20,
 		["William Zeppeli [Lvl. 25+]"] = 25,
 		["Doppio [Lvl. 30+]"] = 30,
 		["DIO [Lvl. 35+]"] = 35,
-		-- Jotaro is the final/endgame quest in this catalog and its display name
-		-- does not include a level tag, so explicitly place it after the level-35 quest.
-		["Jotaro"] = 50,
 	}
 
 	local QUEST_SELECTION_ORDER = {
 		"Officer Sam [Lvl. 1+]",
 		"Deputy Bertrude [Lvl. 10+]",
 		"Abbacchio's Partner [Lvl 15+]",
-		"Homeless Man Jill [Lvl. 15+]",
 		"Dracula [Lvl. 20+]",
 		"William Zeppeli [Lvl. 25+]",
 		"Doppio [Lvl. 30+]",
 		"DIO [Lvl. 35+]",
-		"Jotaro",
 	}
 
 	local function ParseQuests()
@@ -9330,98 +11152,22 @@ return function(Window, player, QuestTab, config)
 		return 0
 	end
 
-	local function GetQuestState()
-		local player = GetPlayer()
-		if not player or not player:FindFirstChild("PlayerStats") then
-			return "none", nil, 0, 0
-		end
-		local stats = player.PlayerStats
-		local currentQuest = stats:FindFirstChild("CurrentQuest")
-		local questProgress = stats:FindFirstChild("QuestProgress")
-		local questMax = stats:FindFirstChild("QuestMaxProgress")
-		local rawQuest = currentQuest and tostring(currentQuest.Value or "") or ""
-		if rawQuest ~= "" then
-			-- CurrentQuest is the server-backed source of truth. Some quests populate
-			-- QuestProgress / QuestMaxProgress a little later (or omit one of them),
-			-- so missing progress objects must not make an accepted quest look absent.
-			local progress = tonumber(questProgress and questProgress.Value) or 0
-			local maxProgress = tonumber(questMax and questMax.Value) or 0
-			if maxProgress > 0 and progress >= maxProgress then
-				return "complete", currentQuest.Value, progress, maxProgress
-			end
-			return "active", currentQuest.Value, progress, maxProgress
-		end
-		return "none", nil, 0, 0
-	end
-
-	local function HasActiveQuest()
-		local state = GetQuestState()
-		return state == "active"
-	end
-
-	local function IsQuestComplete()
-		local state = GetQuestState()
-		return state == "complete"
-	end
-
-	local function GetCurrentQuestDisplayName()
-		local player = GetPlayer()
-		if player and player:FindFirstChild("PlayerStats") then
-			local currentQuest = player.PlayerStats:FindFirstChild("CurrentQuest")
-			if currentQuest and currentQuest.Value ~= "" then
-				return currentQuest.Value
-			end
-		end
-		if getgenv().SelectedQuest and getgenv().SelectedQuest ~= "" and getgenv().SelectedQuest ~= "No quests available" then
-			return getgenv().SelectedQuest
-		end
-		return nil
-	end
-
 	local function UpdateQuestStatusLabel()
-		local labelText = "No active quest"
-		local player = GetPlayer()
-		if not player or not player:FindFirstChild("PlayerStats") then
-			pcall(function()
-				if _G.QuestCurrentQuestLabelObj then
-					if _G.QuestCurrentQuestLabelObj.Set then
-						_G.QuestCurrentQuestLabelObj:Set(labelText)
-					elseif _G.QuestCurrentQuestLabelObj.Text then
-						_G.QuestCurrentQuestLabelObj.Text = labelText
-					end
-				end
-			end)
-			return
-		end
-		local currentQuest = player.PlayerStats:FindFirstChild("CurrentQuest")
-		if not currentQuest or currentQuest.Value == "" then
-			pcall(function()
-				if _G.QuestCurrentQuestLabelObj then
-					if _G.QuestCurrentQuestLabelObj.Set then
-						_G.QuestCurrentQuestLabelObj:Set(labelText)
-					elseif _G.QuestCurrentQuestLabelObj.Text then
-						_G.QuestCurrentQuestLabelObj.Text = labelText
-					end
-				end
-			end)
-			return
-		end
-		local questName = currentQuest.Value
-		local questProgress = player.PlayerStats:FindFirstChild("QuestProgress")
-		local questMax = player.PlayerStats:FindFirstChild("QuestMaxProgress")
-		local progress = 0
-		local maxProgress = 0
-		if questProgress then progress = tonumber(questProgress.Value) or 0 end
-		if questMax then maxProgress = tonumber(questMax.Value) or 0 end
-		if maxProgress > 0 then
-			local remaining = math.max(0, maxProgress - progress)
-			if remaining > 0 then
-				labelText = questName .. " | " .. tostring(progress) .. "/" .. tostring(maxProgress) .. " (" .. tostring(remaining) .. " left)"
+		local target = FarmState.CurrentQuest or QuestRuntime.ManualQuest or getgenv().SelectedQuest
+		local stats = player and player:FindFirstChild("PlayerStats")
+		local progressObject = stats and stats:FindFirstChild("QuestProgress")
+		local maximumObject = stats and stats:FindFirstChild("QuestMaxProgress")
+		local progress = tonumber(progressObject and progressObject.Value) or 0
+		local maximum = tonumber(maximumObject and maximumObject.Value) or 0
+		local labelText = target and ("Target: " .. tostring(target)) or "No target selected"
+		if target and maximum > 0 then
+			local remaining = math.max(0, maximum - progress)
+			labelText ..= " | " .. tostring(progress) .. "/" .. tostring(maximum)
+			if remaining == 0 then
+				labelText ..= " | Finished"
 			else
-				labelText = questName .. " | " .. tostring(progress) .. "/" .. tostring(maxProgress) .. " | Finished"
+				labelText ..= " (" .. tostring(remaining) .. " left)"
 			end
-		else
-			labelText = questName .. " | Progress: " .. tostring(progress)
 		end
 		pcall(function()
 			if _G.QuestCurrentQuestLabelObj then
@@ -9526,315 +11272,6 @@ return function(Window, player, QuestTab, config)
 		return t
 	end
 
-	local function normalizeQuestLocatorText(value)
-		local text = string.lower(tostring(value or ""))
-		text = text:gsub("[^%w%s]", " ")
-		text = text:gsub("%s+", " ")
-		return text:match("^%s*(.-)%s*$") or ""
-	end
-
-	local QUEST_LOCATOR_RULES = {
-		{ Quest = "Homeless Man Jill [Lvl. 15+]", Patterns = {"homeless man jill", "gold coin", "gold coins", "collect 10 gold", "get 10 gold"} },
-		{ Quest = "DIO [Lvl. 35+]", Patterns = {"defeat jotaro", "kill jotaro", "take down jotaro"} },
-		{ Quest = "Doppio [Lvl. 30+]", Patterns = {"doppio", "kill dio", "defeat dio", "take down dio", "dio boss"} },
-		{ Quest = "Abbacchio's Partner [Lvl 15+]", Patterns = {"abbacchio", "abbachio", "take down 5 alpha thugs", "alpha thug", "alpha thugs"} },
-		{ Quest = "Deputy Bertrude [Lvl. 10+]", Patterns = {"deputy bertrude", "take down 5 corrupt police", "take down 5 currupt police", "5 corrupt police", "5 currupt police", "corrupt police", "currupt police"} },
-		{ Quest = "William Zeppeli [Lvl. 25+]", Patterns = {"william zeppeli", "take down 3 vampires", "3 vampires", "vampire"} },
-		{ Quest = "Dracula [Lvl. 20+]", Patterns = {"dracula", "take down 3 zombie", "take down 3 zombies", "3 zombie", "zombie henchman", "zombie"} },
-		{ Quest = "Officer Sam [Lvl. 1+]", Patterns = {"officer sam", "take down 5 thugs", "5 thugs", "thug quest"} },
-	}
-
-	local function resolveQuestLocator(value)
-		local text = normalizeQuestLocatorText(value)
-		if text == "" then return nil end
-
-		-- Objective wording must win over a substring match against a quest giver.
-		-- In particular, "Defeat Jotaro" is the level-35 DIO quest; "Jotaro" by
-		-- itself is the separate endgame quest that targets Heaven Ascension Dio.
-		if text:find("defeat jotaro", 1, true)
-			or text:find("kill jotaro", 1, true)
-			or text:find("take down jotaro", 1, true) then
-			return "DIO [Lvl. 35+]"
-		end
-
-		-- Exact quest-giver names first preserve ambiguous short names such as
-		-- "Jotaro" without allowing them to swallow objective sentences.
-		for _, questName in ipairs(QUEST_SELECTION_ORDER) do
-			local normalizedName = normalizeQuestLocatorText(questName)
-			if normalizedName ~= "" and text == normalizedName then
-				return questName
-			end
-		end
-
-		-- Some versions of the game put only the objective target in
-		-- PlayerStats.CurrentQuest (for example, "Alpha Thug", "Vampire", or
-		-- "Heaven Ascension Dio") rather than the quest giver's display name.
-		-- Resolve exact objective values directly so an already accepted quest
-		-- doesn't remain stuck in the unrecognized/sync state.
-		for _, questName in ipairs(QUEST_SELECTION_ORDER) do
-			local info = QuestInfo[questName]
-			if info then
-				local enemyName = info.Enemy and normalizeQuestLocatorText(info.Enemy) or ""
-				local itemName = info.Item and normalizeQuestLocatorText(info.Item) or ""
-				if (enemyName ~= "" and text == enemyName)
-					or (itemName ~= "" and text == itemName) then
-					return questName
-				end
-			end
-		end
-
-		for _, rule in ipairs(QUEST_LOCATOR_RULES) do
-			for _, pattern in ipairs(rule.Patterns) do
-				local normalizedPattern = normalizeQuestLocatorText(pattern)
-				if normalizedPattern ~= "" and text:find(normalizedPattern, 1, true) then
-					return rule.Quest
-				end
-			end
-		end
-
-		-- Retain matching for quest cards that append progress text after their full
-		-- quest-giver name, but never use a bare "Jotaro" substring for this fallback.
-		for _, questName in ipairs(QUEST_SELECTION_ORDER) do
-			local normalizedName = normalizeQuestLocatorText(questName)
-			if normalizedName ~= "" and normalizedName ~= "jotaro"
-				and text:find(normalizedName, 1, true) then
-				return questName
-			end
-		end
-		return nil
-	end
-
-	local function locateActiveQuest()
-		local texts = {}
-		local function addText(value)
-			if value == nil then return end
-			local text = tostring(value)
-			if text ~= "" then table.insert(texts, text) end
-		end
-
-		local stats = player and player:FindFirstChild("PlayerStats")
-		local currentQuestValue = stats and stats:FindFirstChild("CurrentQuest")
-		if currentQuestValue then addText(currentQuestValue.Value) end
-
-		local playerGui = player and player:FindFirstChildOfClass("PlayerGui")
-		local hud = playerGui and playerGui:FindFirstChild("HUD")
-		local main = hud and hud:FindFirstChild("Main")
-		local frames = main and main:FindFirstChild("Frames")
-		local questFrame = frames and frames:FindFirstChild("Quest")
-		local questList = questFrame and questFrame:FindFirstChild("Quests")
-		local hasActiveQuestCard = false
-
-		local function addInstanceText(instance, includeName)
-			if not instance then return end
-			local ancestor = instance
-			while ancestor do
-				if ancestor.Name == "Sample" then return end
-				if ancestor:IsA("GuiObject") and not ancestor.Visible then return end
-				if ancestor:IsA("ScreenGui") and not ancestor.Enabled then return end
-				ancestor = ancestor.Parent
-			end
-			if includeName then addText(instance.Name) end
-			if instance:IsA("TextLabel") or instance:IsA("TextButton") or instance:IsA("TextBox") then
-				addText(instance.Text)
-			elseif instance:IsA("ValueBase") then
-				addText(instance.Value)
-			end
-		end
-
-		-- Read actual quest cards first (names, objective labels, and progress text).
-		-- This works even when CurrentQuest contains an objective instead of an NPC name.
-		if questList then
-			for _, item in ipairs(questList:GetChildren()) do
-				if item.Name ~= "Sample" and item:IsA("GuiObject") and item.Visible then
-					hasActiveQuestCard = true
-					addInstanceText(item, true)
-					for _, descendant in ipairs(item:GetDescendants()) do
-						addInstanceText(descendant, true)
-					end
-				end
-			end
-		end
-
-		-- Inspect the whole quest HUD before accepting any new quest. CurrentQuest
-		-- can contain only an objective target (for example "Jotaro"), while the
-		-- quest card contains the actual objective. Objective evidence takes priority
-		-- over the quest-giver name so a current quest is resumed, not re-accepted.
-		local allQuestText = table.concat(texts, " | ")
-		local allQuestTextNormalized = normalizeQuestLocatorText(allQuestText)
-
-		-- These explicit objectives disambiguate the two Jotaro-related quests.
-		if allQuestTextNormalized:find("defeat jotaro", 1, true)
-			or allQuestTextNormalized:find("kill jotaro", 1, true)
-			or allQuestTextNormalized:find("take down jotaro", 1, true) then
-			return "DIO [Lvl. 35+]", allQuestText, hasActiveQuestCard
-		end
-		if allQuestTextNormalized:find("heaven ascension dio", 1, true)
-			or allQuestTextNormalized:find("heaven ascended dio", 1, true) then
-			return "Jotaro", allQuestText, hasActiveQuestCard
-		end
-
-		-- Resolve other known objectives from the combined HUD text as well. Text
-		-- can be split into separate labels, so checking each label alone misses
-		-- quests such as Abbacchio's Alpha Thug objective.
-		local objectiveChecks = {
-			{ Quest = "Abbacchio's Partner [Lvl 15+]", Patterns = {"alpha thug", "take down 5 alpha thugs"} },
-			{ Quest = "Deputy Bertrude [Lvl. 10+]", Patterns = {"corrupt police", "currupt police", "take down 5 corrupt police", "take down 5 currupt police"} },
-			{ Quest = "Homeless Man Jill [Lvl. 15+]", Patterns = {"gold coin", "collect 10 gold", "get 10 gold"} },
-			{ Quest = "Dracula [Lvl. 20+]", Patterns = {"zombie henchman", "take down 3 zombies", "take down 3 zombie", "zombie"} },
-			{ Quest = "William Zeppeli [Lvl. 25+]", Patterns = {"take down 3 vampires", "3 vampires", "vampire"} },
-			{ Quest = "Doppio [Lvl. 30+]", Patterns = {"defeat dio", "kill dio", "take down dio", "dio boss"} },
-			{ Quest = "Officer Sam [Lvl. 1+]", Patterns = {"take down 5 thugs", "5 thugs", "thug quest"} },
-		}
-		for _, check in ipairs(objectiveChecks) do
-			for _, pattern in ipairs(check.Patterns) do
-				local normalizedPattern = normalizeQuestLocatorText(pattern)
-				if normalizedPattern ~= "" and allQuestTextNormalized:find(normalizedPattern, 1, true) then
-					return check.Quest, allQuestText, hasActiveQuestCard
-				end
-			end
-		end
-
-		for _, text in ipairs(texts) do
-			local questName = resolveQuestLocator(text)
-			if questName and QuestInfo[questName] then
-				return questName, text, hasActiveQuestCard
-			end
-		end
-
-		-- A title and its objective can be split across two labels, so also try their
-		-- combined text as a fallback.
-		local combined = table.concat(texts, " | ")
-		local questName = resolveQuestLocator(combined)
-		if questName and QuestInfo[questName] then return questName, combined, hasActiveQuestCard end
-		return nil, combined, hasActiveQuestCard
-	end
-
-
-	-- Build evidence separately for each visible quest card. Do not concatenate
-	-- multiple cards when deciding which quest is active: old cards can remain
-	-- visible for a while and otherwise make the farm resume Abbacchio forever.
-	local function getVisibleQuestCardTexts()
-		local result = {}
-		local playerGui = player and player:FindFirstChildOfClass("PlayerGui")
-		local hud = playerGui and playerGui:FindFirstChild("HUD")
-		local main = hud and hud:FindFirstChild("Main")
-		local frames = main and main:FindFirstChild("Frames")
-		local questFrame = frames and frames:FindFirstChild("Quest")
-		local questList = questFrame and questFrame:FindFirstChild("Quests")
-		if not questList then return result end
-
-		local function visibleThroughParents(instance)
-			local ancestor = instance
-			while ancestor do
-				if ancestor.Name == "Sample" then return false end
-				if ancestor:IsA("GuiObject") and not ancestor.Visible then return false end
-				if ancestor:IsA("ScreenGui") and not ancestor.Enabled then return false end
-				ancestor = ancestor.Parent
-			end
-			return true
-		end
-
-		for _, card in ipairs(questList:GetChildren()) do
-			if card.Name ~= "Sample" and card:IsA("GuiObject") and visibleThroughParents(card) then
-				local pieces = {card.Name}
-				if card:IsA("TextLabel") or card:IsA("TextButton") or card:IsA("TextBox") then
-					if tostring(card.Text or "") ~= "" then table.insert(pieces, card.Text) end
-				end
-				for _, descendant in ipairs(card:GetDescendants()) do
-					if visibleThroughParents(descendant)
-						and (descendant:IsA("TextLabel") or descendant:IsA("TextButton") or descendant:IsA("TextBox"))
-						and tostring(descendant.Text or "") ~= "" then
-						table.insert(pieces, descendant.Text)
-					end
-				end
-				local text = normalizeQuestLocatorText(table.concat(pieces, " "))
-				if text ~= "" then table.insert(result, text) end
-			end
-		end
-		return result
-	end
-
-	local QUEST_CARD_TARGET_PATTERNS = {
-		["Officer Sam [Lvl. 1+]"] = {"take down 5 thugs", "take down 5 thug", "5 thugs", "thug quest"},
-		["Deputy Bertrude [Lvl. 10+]"] = {"take down 5 corrupt police", "take down 5 currupt police", "5 corrupt police", "5 currupt police"},
-		["Abbacchio's Partner [Lvl 15+]"] = {"take down 5 alpha thugs", "5 alpha thugs", "alpha thug"},
-		["Homeless Man Jill [Lvl. 15+]"] = {"collect 10 gold coins", "collect 10 gold", "get 10 gold", "gold coin"},
-		["Dracula [Lvl. 20+]"] = {"take down 3 zombies", "take down 3 zombie", "3 zombies", "3 zombie", "zombie henchman"},
-		["William Zeppeli [Lvl. 25+]"] = {"take down 3 vampires", "3 vampires", "vampire"},
-		["Doppio [Lvl. 30+]"] = {"defeat dio", "kill dio", "take down dio", "dio boss"},
-		["DIO [Lvl. 35+]"] = {"defeat jotaro", "kill jotaro", "take down jotaro"},
-		["Jotaro"] = {"heaven ascension dio", "heaven ascended dio"},
-	}
-
-	local function questCardMatchesTarget(cardText, target)
-		if not target or not QuestInfo[target] then return false end
-		local text = normalizeQuestLocatorText(cardText)
-		if text == "" then return false end
-
-		-- These two quests are intentionally disambiguated by the full objective,
-		-- never by the word "Jotaro" alone.
-		if target == "DIO [Lvl. 35+]" then
-			if text:find("heaven ascension dio", 1, true) or text:find("heaven ascended dio", 1, true) then
-				return false
-			end
-		elseif target == "Jotaro" then
-			if text:find("defeat jotaro", 1, true) or text:find("kill jotaro", 1, true)
-				or text:find("take down jotaro", 1, true) then
-				return false
-			end
-		end
-
-		local patterns = QUEST_CARD_TARGET_PATTERNS[target] or {}
-		for _, phrase in ipairs(patterns) do
-			if text:find(normalizeQuestLocatorText(phrase), 1, true) then return true end
-		end
-
-		-- A live card can show the quest-giver title instead of the full objective.
-		local aliases = {
-			["Officer Sam [Lvl. 1+]"] = {"officer sam"},
-			["Deputy Bertrude [Lvl. 10+]"] = {"deputy bertrude"},
-			["Abbacchio's Partner [Lvl 15+]"] = {"abbacchio", "abbachio"},
-			["Homeless Man Jill [Lvl. 15+]"] = {"homeless man jill"},
-			["Dracula [Lvl. 20+]"] = {"dracula"},
-			["William Zeppeli [Lvl. 25+]"] = {"william zeppeli"},
-			["Doppio [Lvl. 30+]"] = {"doppio"},
-			["DIO [Lvl. 35+]"] = {"dio lvl 35"},
-			["Jotaro"] = {"heaven ascension dio", "heaven ascended dio"},
-		}
-		for _, alias in ipairs(aliases[target] or {}) do
-			if text:find(normalizeQuestLocatorText(alias), 1, true) then return true end
-		end
-		return false
-	end
-
-	local function selectedQuestHasActiveEvidence(target, raw)
-		if not target or not QuestInfo[target] then return false end
-		local rawText = normalizeQuestLocatorText(raw)
-		local cards = getVisibleQuestCardTexts()
-		for _, cardText in ipairs(cards) do
-			-- Evaluate one card at a time. A stale Heaven Ascension Dio card must not
-			-- cancel a different card that clearly says "Defeat Jotaro", and vice versa.
-			if questCardMatchesTarget(cardText, target) then return true end
-		end
-
-		-- A CurrentQuest value that is exactly the configured objective is reliable
-		-- for the unambiguous quests (Thug, Alpha Thug, DIO, etc.). Jotaro alone is
-		-- ambiguous, so wait for its full HUD objective rather than guessing.
-		if rawText == "jotaro" then return false end
-		if rawText ~= "" then
-			if rawText == normalizeQuestLocatorText(target) then return true end
-			local data = QuestInfo[target]
-			local enemy = data.Enemy and normalizeQuestLocatorText(data.Enemy) or ""
-			local item = data.Item and normalizeQuestLocatorText(data.Item) or ""
-			if (enemy ~= "" and rawText == enemy) or (item ~= "" and rawText == item) then
-				return true
-			end
-			local rawResolved = QuestInfo[raw] and raw or resolveQuestLocator(raw)
-			if rawResolved == target then return true end
-		end
-		return false
-	end
-
 	local function getPity()
 		return PlayerPity.Value <= 0 and 1
 			or math.clamp(1 + PlayerPity.Value / 25, 0, 10)
@@ -9845,184 +11282,21 @@ return function(Window, player, QuestTab, config)
 	end
 
 	local function FarmLoop()
-		-- Flow: match the selected objective first, otherwise request that quest;
-		-- after completion, turn it in and return to the same selected target.
 		local lp = Players.LocalPlayer
 		local playerGui = lp:WaitForChild("PlayerGui")
 		local hud = playerGui:FindFirstChild("HUD")
 		local completionConnection
-		if hud then
-			completionConnection = hud.ChildAdded:Connect(function(child)
-				if child.Name == "QuestCompleted" then
-					QuestRuntime.CompletionSeenAt = tick()
-					FarmState.CompletedQuest = true
-					getgenv().CompletedQuest = true
-				end
-			end)
-		end
+		local activeTarget = nil
+		local acceptAttempted = false
+		local turnInRetryAt = 0
+		local turnInStartedAt = nil
+		local ignoreProgressCompletionUntil = 0
 
-		task.spawn(function()
-			while FarmState.Active do
-				task.wait(2.5)
-				if not FarmState.Active then break end
-				local stats = lp:FindFirstChild("PlayerStats")
-				local standValue = stats and stats:FindFirstChild("Stand")
-				if isHandheldMethod() and not STAND_KEEPALIVE_EXCLUDED[standValue and standValue.Value or ""] then
-					continue
-				end
-				local char = lp.Character
-				if char then
-					local ss = char:FindFirstChild("SummonedStand")
-					if not (ss and ss.Value) then pcall(FarmUtil.EquipStand) end
-				end
-			end
-		end)
-
-		local masterConn = farmThrottledHeartbeat(function()
-			if not FarmState.Active then return end
-			local char = lp.Character
-			if not char then return end
-			local root = char:FindFirstChild("HumanoidRootPart")
-			if not root then return end
-			local enemy = FarmUtil.CurrentEnemy
-			if enemy and enemy.Parent and enemy:FindFirstChild("HumanoidRootPart") then
-				stickFarmPartsToNPC(char, enemy, isHandheldMethod())
-			else
-				zeroFarmVelocity(root)
-			end
-		end, 22, 45)
-
-		local function rawQuestValue()
+		local function questProgressValues()
 			local stats = lp:FindFirstChild("PlayerStats")
-			local current = stats and stats:FindFirstChild("CurrentQuest")
-			return current and tostring(current.Value or "") or ""
-		end
-
-		local function snapshotQuest()
-			local state, statName, progress, maximum = GetQuestState()
-			local raw = rawQuestValue()
-			local locatedQuest, hudEvidence, hasActiveQuestCard = locateActiveQuest()
-			local stats = lp:FindFirstChild("PlayerStats")
-			local progressObject = stats and stats:FindFirstChild("QuestProgress")
-			local maximumObject = stats and stats:FindFirstChild("QuestMaxProgress")
-			progress = tonumber(progressObject and progressObject.Value) or tonumber(progress) or 0
-			maximum = tonumber(maximumObject and maximumObject.Value) or tonumber(maximum) or 0
-
-			if raw ~= "" and QuestRuntime.IgnoreHUDQuestName then
-				QuestRuntime.IgnoreHUDQuestName = nil
-				QuestRuntime.IgnoreHUDUntil = 0
-			end
-
-			local manualTarget = not getgenv().AutoSelectBestQuest
-				and (QuestRuntime.ManualQuest or getgenv().SelectedQuest) or nil
-			if not QuestInfo[manualTarget] then manualTarget = nil end
-
-			-- The selected target is matched against each active card separately.
-			-- Never let an unrelated/stale Abbacchio card override the server's live
-			-- CurrentQuest value, and never infer a selected quest from text combined
-			-- across several different cards.
-			local manualEvidenceMatch = manualTarget and selectedQuestHasActiveEvidence(manualTarget, raw) or false
-			if raw == "" and manualTarget and QuestRuntime.IgnoreHUDQuestName == manualTarget then
-				-- Turn-in clears CurrentQuest before the old card leaves the HUD. Ignore
-				-- that card so the same manual quest can be accepted again after completion.
-				manualEvidenceMatch = false
-			end
-			local rawNormalized = normalizeQuestLocatorText(raw)
-			local rawResolved = nil
-			if raw ~= "" then
-				rawResolved = QuestInfo[raw] and raw or resolveQuestLocator(raw)
-			end
-
-			-- "Jotaro" by itself is ambiguous between the level-35 objective and the
-			-- separate Heaven Ascension Dio quest. Wait for the active card's full
-			-- objective instead of picking either quest from that single word.
-			if rawNormalized == "jotaro" then
-				local cards = getVisibleQuestCardTexts()
-				local cardDerivedQuest = nil
-				for _, cardText in ipairs(cards) do
-					if cardText:find("defeat jotaro", 1, true) or cardText:find("kill jotaro", 1, true)
-						or cardText:find("take down jotaro", 1, true) then
-						cardDerivedQuest = "DIO [Lvl. 35+]"
-						break
-					elseif cardText:find("heaven ascension dio", 1, true)
-						or cardText:find("heaven ascended dio", 1, true) then
-						cardDerivedQuest = "Jotaro"
-						break
-					end
-				end
-				if cardDerivedQuest then
-					rawResolved = cardDerivedQuest
-				else
-					return "sync", nil, progress, maximum, raw
-				end
-			end
-
-			if raw == "" then
-				if manualTarget then
-					if manualEvidenceMatch then
-						if maximum > 0 and progress >= maximum then
-							return "complete", manualTarget, progress, maximum, raw
-						end
-						return "active", manualTarget, progress, maximum, raw
-					end
-					-- Manual mode means a stale card for another quest is not proof that
-					-- the chosen quest is active. Treat it as no matching quest and request
-					-- the selected giver rather than farming the stale card's enemy.
-					return "none", nil, progress, maximum, raw
-				end
-
-				local located = locatedQuest
-				if located and QuestInfo[located] then
-					if QuestRuntime.IgnoreHUDQuestName == located then
-						return "none", nil, progress, maximum, raw
-					elseif QuestRuntime.IgnoreHUDQuestName and located ~= QuestRuntime.IgnoreHUDQuestName then
-						QuestRuntime.IgnoreHUDQuestName = nil
-						QuestRuntime.IgnoreHUDUntil = 0
-					end
-					local stats = lp:FindFirstChild("PlayerStats")
-					local progressValue = stats and stats:FindFirstChild("QuestProgress")
-					local maximumValue = stats and stats:FindFirstChild("QuestMaxProgress")
-					progress = tonumber(progressValue and progressValue.Value) or 0
-					maximum = tonumber(maximumValue and maximumValue.Value) or 0
-					if maximum > 0 and progress >= maximum then
-						return "complete", located, progress, maximum, raw
-					end
-					return "active", located, progress, maximum, raw
-				end
-				if hasActiveQuestCard then
-					return "sync", nil, progress, maximum, raw
-				end
-				return "none", nil, progress, maximum, raw
-			end
-
-			-- Start with the live server value. A HUD result is allowed to refine it
-			-- only when the server value is unresolvable; it is not allowed to replace
-			-- a valid CurrentQuest with an unrelated visible quest card.
-			local resolved = rawResolved
-			if manualTarget and manualEvidenceMatch then
-				if rawNormalized == "jotaro" or not resolved then
-					resolved = manualTarget
-				end
-			end
-			if not resolved and not manualTarget and locatedQuest and QuestInfo[locatedQuest] then
-				resolved = locatedQuest
-			end
-
-			if not resolved then
-				if manualTarget then
-					-- A non-empty but unfamiliar CurrentQuest should not permanently block
-					-- a manual choice. No selected-objective match means try the selection.
-					return "none", nil, progress, maximum, raw
-				end
-			return "sync", nil, progress, maximum, raw
-			end
-
-			if maximum > 0 and progress >= maximum then
-				state = "complete"
-			else
-				state = "active"
-			end
-			return state, resolved, progress, maximum, raw
+			local progress = stats and stats:FindFirstChild("QuestProgress")
+			local maximum = stats and stats:FindFirstChild("QuestMaxProgress")
+			return tonumber(progress and progress.Value) or 0, tonumber(maximum and maximum.Value) or 0
 		end
 
 		local function isValidQuest(name)
@@ -10037,174 +11311,158 @@ return function(Window, player, QuestTab, config)
 				chosen = QuestRuntime.ManualQuest or getgenv().SelectedQuest
 			end
 			if not isValidQuest(chosen) then chosen = GetLowestLevelQuest() end
-			if isValidQuest(chosen) then return chosen end
-			return nil
+			return isValidQuest(chosen) and chosen or nil
 		end
 
-		local function refreshQuestProgressLabel(state, questName, progress, maximum, raw)
-			if tick() - (QuestRuntime.LastStatusUpdate or 0) < 0.4 then return end
-			QuestRuntime.LastStatusUpdate = tick()
+		local function updateProgressLabel()
 			UpdateQuestStatusLabel()
-			local detail
-			if state == "none" then
-				detail = "No active quest. Next target: " .. tostring(chooseNextQuest() or "waiting for an available quest")
-			elseif state == "sync" then
-				detail = "Reading active quest data: " .. tostring(raw or "waiting for server")
-			elseif maximum > 0 then
-				detail = tostring(questName) .. "  •  " .. tostring(progress) .. "/" .. tostring(maximum)
-			else
-				detail = tostring(questName) .. "  •  progress syncing"
+			local progress, maximum = questProgressValues()
+			local detail = tostring(activeTarget or "No quest selected")
+			if maximum > 0 then
+				detail ..= "  •  " .. tostring(progress) .. "/" .. tostring(maximum)
 			end
 			pcall(function()
-				if QuestProgressLabel and QuestProgressLabel.SetDesc then QuestProgressLabel:SetDesc(detail) end
+				if QuestProgressLabel and QuestProgressLabel.SetDesc then
+					QuestProgressLabel:SetDesc(detail)
+				end
 			end)
 		end
 
-		local function attemptAcceptQuest(questName, forceReplace)
-			local now = tick()
-			if not isValidQuest(questName) then return false end
-			if now - (QuestRuntime.LastAcceptAttempt or 0) < 0.5 then return false end
-			if QuestRuntime.LastAcceptQuest ~= questName then
-				QuestRuntime.LastAcceptQuest = questName
-				QuestRuntime.AcceptRetryAt = 0
-				QuestRuntime.AcceptFailureCount = 0
-			end
-			if now < (QuestRuntime.AcceptRetryAt or 0) then
-				setQuestStatus("Waiting to retry", "Waiting before reopening " .. tostring(questName) .. ". The last dialogue did not confirm an accepted quest.")
+		local function assignNextTarget()
+			local nextQuest = chooseNextQuest()
+			if not nextQuest then
+				setQuestStatus("No quest available", "Choose a quest or wait for the quest catalog to become available.")
 				return false
 			end
-			QuestRuntime.LastAcceptAttempt = now
-
-			-- Recheck the quest immediately before interacting. This avoids starting a
-			-- stale target's dialogue if the server has just synced another active quest.
-			local beforeState, beforeName, beforeProgress, beforeMaximum, beforeRaw = snapshotQuest()
-			if beforeState == "sync" and beforeRaw ~= "" then
-				-- Never open another quest dialogue while the server says a quest is
-				-- already active but its name is still ambiguous. Wait for the objective
-				-- HUD to identify it; this prevents duplicate acceptance on quest startup.
-				setQuestStatus("Waiting for active quest sync", "The server already has an active quest (" .. tostring(beforeRaw) .. "). Waiting to identify it instead of accepting another quest.")
-				QuestRuntime.AcceptRetryAt = now + 0.75
-				return false
-			end
-
-			if beforeState ~= "none" and beforeState ~= "sync" then
-				if forceReplace and beforeName ~= questName then
-					setQuestStatus("Switching to selected quest", "The current quest is " .. tostring(beforeName) .. ". Requesting your manually selected target: " .. tostring(questName) .. ".")
-				else
-					if beforeName then
-						setQuestStatus("Resuming active quest", "The server already reports " .. tostring(beforeName) .. ". Not opening another quest dialogue.")
-					end
-					QuestRuntime.AcceptRetryAt = now + 1
-					return false
-				end
-			end
-
-			local dialogues = workspace:FindFirstChild("Dialogues")
-			local npc = dialogues and dialogues:FindFirstChild(questName)
-			if not npc then
-				setQuestStatus("Waiting for NPC", "Auto target: " .. tostring(questName) .. ". Waiting for this quest giver to replicate instead of falling back to Dracula.")
-				QuestRuntime.AcceptRetryAt = now + 1.5
-				return false
-			end
-
-			QuestRuntime.LastRawQuest = rawQuestValue()
-			setQuestStatus("Accepting quest", "Talking to " .. tostring(questName) .. ". Waiting for the server to confirm acceptance before doing anything else.")
-			local ok, result = pcall(GetQuest, npc, forceReplace == true)
-			if not ok then
-				warn("[Quest Farm] Accept attempt failed: " .. tostring(result))
-			elseif result == true and QuestRuntime.IgnoreHUDQuestName == questName then
-				-- We have now interacted with the same quest giver again, so its card can
-				-- represent the new quest instead of the completed quest left behind.
-				QuestRuntime.IgnoreHUDQuestName = nil
-				QuestRuntime.IgnoreHUDUntil = 0
-			end
-
-			-- Allow the quest state and HUD a little time to replicate. Do not reopen
-			-- the same NPC every two seconds when the server hasn't acknowledged it.
-			local confirmDeadline = tick() + 1.8
-			local stateAfter, nameAfter = "none", nil
-			repeat
-				task.wait(0.12)
-				stateAfter, nameAfter = snapshotQuest()
-			until (stateAfter ~= "none" and stateAfter ~= "sync") or not FarmState.Active or tick() >= confirmDeadline
-
-			if stateAfter ~= "none" and stateAfter ~= "sync" then
-				if nameAfter == questName then
-					QuestRuntime.AcceptFailureCount = 0
-					QuestRuntime.AcceptRetryAt = 0
-					QuestRuntime.OverrideRequested = false
-					setQuestStatus("Quest accepted", "Confirmed " .. tostring(questName) .. ". Starting its objective now.")
-					return true
-				end
-				-- For a forced manual switch, an unrelated active quest is not a
-				-- successful result. Fall through to the retry/backoff path below.
-			end
-
-			QuestRuntime.AcceptFailureCount = math.min((QuestRuntime.AcceptFailureCount or 0) + 1, 4)
-			local backoff = math.min(2 ^ QuestRuntime.AcceptFailureCount, 16)
-			QuestRuntime.AcceptRetryAt = tick() + backoff
-			setQuestStatus("Quest not confirmed", "The server did not confirm " .. tostring(questName) .. ". Waiting " .. tostring(backoff) .. " seconds before retrying to avoid reopening the dialogue repeatedly.")
-			if tick() - (QuestRuntime.LastFailureNotice or 0) > 8 then
-				QuestRuntime.LastFailureNotice = tick()
-				notify("Quest Farm", "Quest acceptance wasn't confirmed. The farm will wait before retrying.", 4, "warning")
-			end
-			return false
+			activeTarget = nextQuest
+			FarmState.CurrentQuest = nextQuest
+			QuestRuntime.ActiveQuest = nextQuest
+			FarmState.CompletedQuest = false
+			getgenv().CompletedQuest = false
+			acceptAttempted = false
+			turnInRetryAt = 0
+			turnInStartedAt = nil
+			setQuestStatus("Quest target selected", "Target: " .. tostring(nextQuest) .. ". Quest Farm will open this giver once, then farm its configured objective.")
+			return true
 		end
 
-		local function attemptTurnIn(questName, itemObjective)
-			if tick() - (QuestRuntime.LastTurnInAttempt or 0) < 2.0 then return false end
-			QuestRuntime.LastTurnInAttempt = tick()
+		local function attemptAcceptOnce(questName)
+			if acceptAttempted or not isValidQuest(questName) or isSelling() then return acceptAttempted end
 			local dialogues = workspace:FindFirstChild("Dialogues")
 			local npc = dialogues and dialogues:FindFirstChild(questName)
 			if not npc then
-				setQuestStatus("Waiting to turn in", "Quest is complete, but its giver isn't available: " .. tostring(questName))
+				setQuestStatus("Waiting for quest giver", "Waiting for " .. tostring(questName) .. " to load before making the single quest request.")
 				return false
 			end
-			setQuestStatus("Turning in quest", "Claiming the reward from " .. tostring(questName) .. ".")
-			local beforeProgress, beforeMaximum = 0, 0
-			local beforeState, beforeName, p, m = snapshotQuest()
-			beforeProgress, beforeMaximum = p or 0, m or 0
-			local beforeRaw = rawQuestValue()
-			local ok, clickedTurnIn = pcall(TurnInQuest, npc)
+
+			acceptAttempted = true
+			QuestRuntime.LastAcceptAttempt = tick()
+			QuestRuntime.LastAcceptQuest = questName
+			setQuestStatus("Requesting quest once", "Opening " .. tostring(questName) .. " and selecting its quest option once, without checking which quest is already active.")
+			local ok, interacted = pcall(GetQuest, npc)
 			if not ok then
-				warn("[Quest Farm] Turn-in attempt failed: " .. tostring(clickedTurnIn))
-			elseif clickedTurnIn == true then
-				-- If CurrentQuest clears before the Quest HUD card animates away, ignore only
-				-- that old card briefly. The target selector remains independent of it.
-				QuestRuntime.IgnoreHUDQuestName = questName
-				QuestRuntime.IgnoreHUDUntil = math.huge
-				QuestRuntime.LastTurnInClickAt = tick()
+				warn("[Quest Farm] Quest request failed: " .. tostring(interacted))
+				setQuestStatus("Quest request attempted", "The NPC dialogue was attempted once. The farm will still work the selected target.")
+			elseif interacted then
+				setQuestStatus("Quest requested", "NPC dialogue interaction finished. Farming " .. tostring(questName) .. " regardless of any existing quest state.")
+			else
+				setQuestStatus("Quest request attempted", "The NPC dialogue was attempted once. Farming will continue using the selected target and progress counter only.")
 			end
-			local deadline = tick() + 3.2
-			local cleared = false
-			repeat
-				task.wait(0.16)
-				local afterState, afterName, afterProgress, afterMaximum = snapshotQuest()
-				local afterRaw = rawQuestValue()
-				if afterState == "none" or (beforeRaw ~= "" and afterRaw == "")
-					or (afterRaw == "" and QuestRuntime.CompletionSeenAt ~= nil
-						and tick() - QuestRuntime.CompletionSeenAt < 10) then
-					cleared = true
-				elseif afterName and afterName ~= questName then
-					cleared = true
-				elseif afterName == questName and beforeMaximum > 0 and beforeProgress >= beforeMaximum
-					and afterState == "active" and afterMaximum > 0 and afterProgress < afterMaximum then
-					cleared = true
-				end
-			until cleared or not FarmState.Active or tick() >= deadline
-			if cleared then
-				FarmState.CompletedQuest = false
-				getgenv().CompletedQuest = false
-				FarmState.CurrentQuest = nil
-				QuestRuntime.ActiveQuest = nil
-				setQuestStatus("Quest turned in", "Reward claimed. Selecting the next quest using " .. (getgenv().AutoSelectBestQuest and "Auto Select Best Quest" or "your manual selection") .. ".")
+			task.wait(0.25)
+			return true
+		end
+
+		local function clearFinishedTarget(questName)
+			setQuestStatus("Quest turn-in handled", "Finished the " .. tostring(questName) .. " cycle. Recalculating the next target from your current level.")
+			activeTarget = nil
+			FarmState.CurrentQuest = nil
+			QuestRuntime.ActiveQuest = nil
+			FarmState.CompletedQuest = false
+			getgenv().CompletedQuest = false
+			acceptAttempted = false
+			turnInRetryAt = 0
+			turnInStartedAt = nil
+			ignoreProgressCompletionUntil = tick() + 1.25
+		end
+
+		local function attemptTurnIn(questName)
+			if tick() < turnInRetryAt or isSelling() then return false end
+			local dialogues = workspace:FindFirstChild("Dialogues")
+			local npc = dialogues and dialogues:FindFirstChild(questName)
+			if not npc then
+				setQuestStatus("Waiting to turn in", "The objective is complete. Waiting for " .. tostring(questName) .. " to load for the reward interaction.")
+				turnInRetryAt = tick() + 1.25
+				return false
+			end
+
+			if not turnInStartedAt then turnInStartedAt = tick() end
+			local beforeProgress, beforeMaximum = questProgressValues()
+			QuestRuntime.LastTurnInAttempt = tick()
+			setQuestStatus("Turning in quest", "Opening " .. tostring(questName) .. " to claim the completed objective.")
+			local ok, interacted = pcall(TurnInQuest, npc)
+			if not ok then
+				warn("[Quest Farm] Turn-in attempt failed: " .. tostring(interacted))
+				interacted = false
+			end
+			task.wait(0.65)
+			local afterProgress, afterMaximum = questProgressValues()
+			local progressReset = beforeMaximum > 0
+				and (afterMaximum < beforeMaximum or afterProgress < beforeProgress)
+
+			if progressReset or (beforeMaximum <= 0 and interacted == true) then
+				clearFinishedTarget(questName)
 				return true
 			end
-			if FarmState.Active then
-				setQuestStatus("Turn-in pending", (itemObjective and "Items are collected. " or "The objective is complete. ") .. "Waiting for the server to clear the quest before accepting another.")
+
+			if interacted == true and turnInStartedAt and tick() - turnInStartedAt >= 3.5 then
+				clearFinishedTarget(questName)
+				return true
 			end
+
+			turnInRetryAt = tick() + 1.5
+			setQuestStatus("Waiting for turn-in", "The NPC interaction was attempted. Waiting briefly for the progress counter to reset before changing targets.")
 			return false
 		end
+
+		if hud then
+			completionConnection = hud.DescendantAdded:Connect(function(child)
+				if child and child.Name == "QuestCompleted" and FarmState.Active then
+					FarmState.CompletedQuest = true
+					getgenv().CompletedQuest = true
+				end
+			end)
+		end
+
+		task.spawn(function()
+			while FarmState.Active do
+				task.wait(2.5)
+				if not FarmState.Active then break end
+				local stats = lp:FindFirstChild("PlayerStats")
+				local standValue = stats and stats:FindFirstChild("Stand")
+				if isHandheldMethod() and not STAND_KEEPALIVE_EXCLUDED[standValue and standValue.Value or ""] then continue end
+				local char = lp.Character
+				if char then
+					local ss = char:FindFirstChild("SummonedStand")
+					if not (ss and ss.Value) then pcall(FarmUtil.EquipStand) end
+				end
+			end
+		end)
+
+		local masterConn = RunService.Heartbeat:Connect(function()
+			if not FarmState.Active then return end
+			local char = lp.Character
+			if not char then return end
+			local root = char:FindFirstChild("HumanoidRootPart")
+			if not root then return end
+			local enemy = FarmUtil.CurrentEnemy
+			if enemy and enemy.Parent and enemy:FindFirstChild("HumanoidRootPart") then
+				startQuestNPCView(enemy)
+				stickFarmPartsToNPC(char, enemy, isHandheldMethod())
+			else
+				stopQuestNPCView()
+				zeroFarmVelocity(root)
+			end
+		end, 22, 45)
 
 		while FarmState.Active do
 			if not IsPlayerReady() then
@@ -10213,81 +11471,38 @@ return function(Window, player, QuestTab, config)
 				continue
 			end
 
-			local state, questName, progress, maximum, raw = snapshotQuest()
-			refreshQuestProgressLabel(state, questName, progress, maximum, raw)
-
-			if state == "none" then
-				FarmState.CompletedQuest = false
-				getgenv().CompletedQuest = false
-				local nextQuest = chooseNextQuest()
-				if not nextQuest then
-					setQuestStatus("No quest available", "No known quest is available right now. Waiting for quest NPCs to load.")
-					task.wait(0.5)
-					continue
-				end
-				FarmState.CurrentQuest = nextQuest
-				QuestRuntime.ActiveQuest = nil
-				if tick() - (QuestRuntime.LastAcceptAttempt or 0) >= 2.0 then
-					attemptAcceptQuest(nextQuest)
-				else
-					setQuestStatus("Waiting for acceptance", "Target: " .. nextQuest .. ". Waiting for the previous dialogue/server response before retrying.")
-					task.wait(0.15)
-				end
-				task.wait(0.12)
+			if not activeTarget and not assignNextTarget() then
+				task.wait(0.5)
 				continue
 			end
 
-			if state == "sync" or not questName then
-				-- A non-empty CurrentQuest is proof that the player already has a quest.
-				-- If its label has not synchronized, do not accept anything else yet.
-				-- snapshotQuest will map it as soon as the objective text becomes readable.
-				if raw and raw ~= "" then
-					setQuestStatus("Synchronizing active quest", "The server already reports an active quest (" .. tostring(raw) .. "). Waiting to identify its objective before opening another quest dialogue.")
-				else
-					setQuestStatus("Synchronizing quest", "An active quest card is visible, but its objective hasn't synchronized yet. Waiting instead of accepting another quest.")
-				end
-				task.wait(0.25)
+			if not attemptAcceptOnce(activeTarget) then
+				task.wait(0.2)
 				continue
 			end
 
-			local manualTarget = not getgenv().AutoSelectBestQuest and chooseNextQuest() or nil
-			if manualTarget and questName ~= manualTarget then
-				local activeData = QuestInfo[questName]
-				if state == "complete" or (maximum > 0 and progress >= maximum) then
-					FarmState.CurrentQuest = questName
-					QuestRuntime.ActiveQuest = questName
-					FarmState.CompletedQuest = true
-					getgenv().CompletedQuest = true
-					attemptTurnIn(questName, activeData and activeData.Item ~= nil)
-				else
-					QuestRuntime.OverrideRequested = true
-					FarmState.CurrentQuest = manualTarget
-					if tick() - (QuestRuntime.LastAcceptAttempt or 0) >= 2.0 then
-						attemptAcceptQuest(manualTarget, true)
-					else
-						setQuestStatus("Switching to selected quest", "Your manual target is " .. tostring(manualTarget) .. ". Waiting to request it; the farm will not attack " .. tostring(questName) .. " in the meantime.")
-					end
-				end
-				task.wait(0.12)
-				continue
-			end
-
-			QuestRuntime.OverrideRequested = false
-			local questData = QuestInfo[questName]
+			local questData = QuestInfo[activeTarget]
 			if not questData then
-				setQuestStatus("Unknown active quest", "The game reports an active quest that isn't mapped yet: " .. tostring(raw) .. ". Waiting without opening another dialogue.")
-				task.wait(0.35)
+				setQuestStatus("Unknown target", "No objective handler exists for " .. tostring(activeTarget) .. ".")
+				task.wait(0.3)
 				continue
 			end
 
-			FarmState.CurrentQuest = questName
-			QuestRuntime.ActiveQuest = questName
-			QuestRuntime.LastRawQuest = raw
-			local isStatComplete = maximum > 0 and progress >= maximum
-			if state == "complete" or isStatComplete then
+			local progress, maximum = questProgressValues()
+			local complete = FarmState.CompletedQuest == true
+			if maximum > 0 and progress >= maximum and tick() >= ignoreProgressCompletionUntil then
+				complete = true
+			end
+
+			if questData.Item then
+				local count = FarmUtil.CountItem(questData.Item)
+				if count >= questData.Amount then complete = true end
+			end
+
+			if complete then
 				FarmState.CompletedQuest = true
 				getgenv().CompletedQuest = true
-				attemptTurnIn(questName, questData.Item ~= nil)
+				attemptTurnIn(activeTarget)
 				task.wait(0.12)
 				continue
 			end
@@ -10295,13 +11510,13 @@ return function(Window, player, QuestTab, config)
 			FarmState.CompletedQuest = false
 			getgenv().CompletedQuest = false
 			if questData.Enemy then
-				setQuestStatus("Farming objective", questName .. "  •  " .. tostring(progress) .. "/" .. tostring(maximum) .. "  •  target: " .. tostring(questData.Enemy))
+				setQuestStatus("Farming selected target", tostring(activeTarget) .. "  •  target: " .. tostring(questData.Enemy) .. (maximum > 0 and ("  •  " .. tostring(progress) .. "/" .. tostring(maximum)) or ""))
 				local enemy = findAliveQuestEnemy(questData.Enemy)
 				if enemy then
 					local ok, err = pcall(FarmUtil.Kill, enemy)
 					if not ok then
 						warn("[Quest Farm] Combat iteration failed: " .. tostring(err))
-						setQuestStatus("Recovering combat", "An enemy action failed. The farm will reacquire the target and continue.")
+						setQuestStatus("Recovering combat", "The target action failed. Reacquiring the configured enemy and continuing.")
 						task.wait(0.25)
 					end
 				else
@@ -10309,31 +11524,24 @@ return function(Window, player, QuestTab, config)
 				end
 			elseif questData.Item then
 				local count = FarmUtil.CountItem(questData.Item)
-				if count >= questData.Amount then
-					setQuestStatus("Items collected", questName .. "  •  " .. tostring(count) .. "/" .. tostring(questData.Amount) .. "  •  turning in reward")
-					attemptTurnIn(questName, true)
-				else
-					setQuestStatus("Collecting items", questName .. "  •  " .. tostring(count) .. "/" .. tostring(questData.Amount) .. " " .. tostring(questData.Item))
-					local spawns = workspace:FindFirstChild("Item_Spawns")
-					local spawnParent = spawns and spawns:FindFirstChild("Items")
-					local targetItem = nil
-					if spawnParent then
-						for _, item in ipairs(spawnParent:GetChildren()) do
-							if item.Name == questData.Item then targetItem = item break end
-						end
-					end
-					if targetItem then
-						local ok, err = pcall(FarmUtil.Collect, targetItem)
-						if not ok then warn("[Quest Farm] Item collection failed: " .. tostring(err)) end
-					else
-						task.wait(0.25)
+				setQuestStatus("Collecting selected objective", tostring(activeTarget) .. "  •  " .. tostring(count) .. "/" .. tostring(questData.Amount) .. " " .. tostring(questData.Item))
+				local spawns = workspace:FindFirstChild("Item_Spawns")
+				local spawnParent = spawns and spawns:FindFirstChild("Items")
+				local targetItem
+				if spawnParent then
+					for _, item in ipairs(spawnParent:GetChildren()) do
+						if item.Name == questData.Item then targetItem = item break end
 					end
 				end
-			else
-				setQuestStatus("Unknown objective", "No farming handler exists for " .. tostring(questName) .. ".")
-				task.wait(0.3)
+				if targetItem then
+					local ok, err = pcall(FarmUtil.Collect, targetItem)
+					if not ok then warn("[Quest Farm] Item collection failed: " .. tostring(err)) end
+				else
+					task.wait(0.25)
+				end
 			end
 
+			updateProgressLabel()
 			task.wait(math.max(0.1, tonumber(FarmConfig.QuestCheckDelay) or 0.35))
 		end
 
@@ -10377,7 +11585,6 @@ return function(Window, player, QuestTab, config)
 		end
 
 		local running = true
-		startQuestNPCView(enemy)
 		local moneyConn
 		local dropMoney = Players.LocalPlayer.PlayerGui:FindFirstChild("HUD")
 			and Players.LocalPlayer.PlayerGui.HUD:FindFirstChild("Main")
@@ -10392,7 +11599,7 @@ return function(Window, player, QuestTab, config)
 			end)
 		end
 
-		local heartbeat = farmThrottledHeartbeat(function()
+		local heartbeat = RunService.Heartbeat:Connect(function()
 			if not running or not noQuestKillEnabled then return end
 			if enemy.Parent == nil then return end
 			local currentHRP = enemy:FindFirstChild("HumanoidRootPart")
@@ -10516,7 +11723,7 @@ return function(Window, player, QuestTab, config)
 	QuestRuntime.ManualQuest = initialManualQuest
 	getgenv().SelectedQuest = initialManualQuest
 	QuestStatusLabel = QuestLeft:Paragraph("Automation Status", "Ready. Choose a quest, then enable Quest Farm.")
-	QuestProgressLabel = QuestLeft:Paragraph("Active Quest", "No active quest")
+	QuestProgressLabel = QuestLeft:Paragraph("Selected Target", "No target selected")
 	_G.QuestCurrentQuestLabelObj = QuestProgressLabel
 	QuestLeft:Divider()
 
@@ -10547,10 +11754,8 @@ return function(Window, player, QuestTab, config)
 		QuestRuntime.ManualQuest = selected
 		getgenv().SelectedQuest = selected
 		if not FarmState.Active then FarmState.CurrentQuest = nil end
-		if FarmState.Active and selected ~= (QuestRuntime.ActiveQuest or FarmState.CurrentQuest) then
-			QuestRuntime.OverrideRequested = true
-		end
-		setQuestStatus("Manual target selected", "Quest Farm will prioritize " .. selected .. ". If another quest is active, it will request this target and avoid attacking the old target.")
+		if FarmState.Active then QuestRuntime.OverrideRequested = false end
+		setQuestStatus("Manual target selected", "Selected: " .. selected .. ". Quest Farm will request this target once when the next quest cycle begins.")
 		Window:Notify("Quest Farm", "Manual quest selected: " .. selected, 3)
 	end)
 
@@ -10560,8 +11765,8 @@ return function(Window, player, QuestTab, config)
 			QuestRuntime.OverrideRequested = false
 			local currentLevel = GetPlayerLevel()
 			local best = GetBestQuestForLevel(currentLevel)
-			setQuestStatus("Automatic selection", "Auto mode is ON. Player level: " .. tostring(currentLevel) .. ". Next target: " .. tostring(best or "waiting for an available quest") .. ". Quest selection uses the full quest catalog, not only replicated NPCs.")
-			Window:Notify("Quest Farm", "Auto selection enabled at level " .. tostring(currentLevel) .. ". Target: " .. tostring(best or "none available") .. ". The active quest won't be interrupted.", 4)
+			setQuestStatus("Automatic selection", "Auto mode is ON. Player level: " .. tostring(currentLevel) .. ". Next target: " .. tostring(best or "waiting for an available quest") .. ". The target is recalculated after each completed quest cycle.")
+			Window:Notify("Quest Farm", "Auto selection enabled at level " .. tostring(currentLevel) .. ". Target: " .. tostring(best or "none available") .. ". The next target is recalculated after completion.", 4)
 		else
 			local manual = QuestRuntime.ManualQuest or GetLowestLevelQuest()
 			if manual then
@@ -10571,7 +11776,7 @@ return function(Window, player, QuestTab, config)
 			setQuestStatus("Manual selection", "Auto mode is OFF. Quest Farm will use your selected quest: " .. tostring(manual or "choose a quest") .. ". It won't replace it with the best-for-level quest.")
 			Window:Notify("Quest Farm", "Auto Select Best Quest disabled. Your manual selection will be respected.", 3)
 		end
-	end, "When enabled, selects the highest available quest for your level. When disabled, uses your chosen quest.", "list-check")
+	end, "When enabled, recalculates the highest quest available for your level after each completed quest cycle. When disabled, keeps using your chosen quest.", "list-check")
 
 	QuestMethodDropdown = QuestLeft:Dropdown("Combat Method", {"With Stand", "Without Stand"}, getgenv().QuestMethod, function(selected)
 		if selected ~= "With Stand" and selected ~= "Without Stand" then return end
@@ -10608,26 +11813,36 @@ return function(Window, player, QuestTab, config)
 	end, "How often the farm rechecks progress when not fighting.")
 
 	QuestLeft:Divider()
-	QuestLeft:Toggle("Enable Quest Farm", getgenv().QuestFarmEnabled == true, function(value)
+	local QuestFarmToggle
+	local function resetQuestFarmToggle()
+		if QuestFarmToggle and type(QuestFarmToggle.Set) == "function" then
+			pcall(function() QuestFarmToggle:Set(false, true) end)
+		end
+	end
+	QuestFarmToggle = QuestLeft:Toggle("Enable Quest Farm", getgenv().QuestFarmEnabled == true, function(value)
 		if value then
 			if config.canStart and not config.canStart() then
 				setQuestStatus("Blocked by another farm", "Stop Auto Farm, Auto Prestige, and selling before starting Quest Farm.")
 				Window:Notify("Quest Farm", "Stop Auto Farm, Auto Prestige, and selling before starting Quest Farm.", 4)
+				resetQuestFarmToggle()
 				return
 			end
 			if getgenv().normalFarmOn or getgenv().afkFarmOn or getgenv().afkUnderneathFarmOn or getgenv().safePlaceFarmOn then
 				setQuestStatus("Blocked by item farm", "Turn off Item Farm before starting Quest Farm.")
 				Window:Notify("Quest Farm", "Item Farm is running. Disable it first.", 4)
+				resetQuestFarmToggle()
 				return
 			end
 			if getgenv().NPCFarmEnabled then
 				setQuestStatus("Blocked by NPC Farm", "Turn off the standalone NPC Farm before starting Quest Farm.")
 				Window:Notify("Quest Farm", "NPC Farm is running. Disable it first.", 4)
+				resetQuestFarmToggle()
 				return
 			end
 			if not getgenv().AutoSelectBestQuest and not (QuestRuntime.ManualQuest and QuestInfo[QuestRuntime.ManualQuest]) then
 				setQuestStatus("Choose a quest", "Select a manual quest before starting with Auto Select Best Quest disabled.")
 				Window:Notify("Quest Farm", "Choose a quest first, or enable Auto Select Best Quest.", 4)
+				resetQuestFarmToggle()
 				return
 			end
 			local root = FarmUtil.GetHRP()
@@ -10637,14 +11852,7 @@ return function(Window, player, QuestTab, config)
 			QuestRuntime.ActiveQuest = nil
 			QuestRuntime.LastAcceptAttempt = 0
 			QuestRuntime.LastAcceptQuest = nil
-			QuestRuntime.AcceptRetryAt = 0
-			QuestRuntime.AcceptFailureCount = 0
 			QuestRuntime.LastTurnInAttempt = 0
-			QuestRuntime.LastFailureNotice = 0
-			QuestRuntime.CompletionSeenAt = nil
-			QuestRuntime.IgnoreHUDQuestName = nil
-			QuestRuntime.IgnoreHUDUntil = 0
-			QuestRuntime.LastTurnInClickAt = 0
 			QuestRuntime.DialogueTarget = nil
 			QuestRuntime.OverrideRequested = false
 			FarmState.Active = true
@@ -10653,8 +11861,8 @@ return function(Window, player, QuestTab, config)
 			if enableNoclip then pcall(enableNoclip) end
 			local startLevel = GetPlayerLevel()
 			local chosen = getgenv().AutoSelectBestQuest and GetBestQuestForLevel(startLevel) or QuestRuntime.ManualQuest
-			setQuestStatus("Quest Farm starting", "Player level: " .. tostring(startLevel) .. ". Target: " .. tostring(chosen or "the selected target") .. ". Manual selection takes priority; a different active quest will not be farmed while switching targets.")
-			Window:Notify("Quest Farm", "Started. The farm will confirm every accepted quest before attacking.", 3)
+			setQuestStatus("Quest Farm starting", "Player level: " .. tostring(startLevel) .. ". Target: " .. tostring(chosen or "the selected target") .. ". The selected quest giver will be opened once, then its configured objective will be farmed.")
+			Window:Notify("Quest Farm", "Started. The selected quest giver will be contacted once per quest cycle; objective farming follows the selected target, not detected quest names.", 3)
 			task.spawn(function()
 				local ok, err = pcall(FarmLoop)
 				if not ok then
@@ -10664,6 +11872,7 @@ return function(Window, player, QuestTab, config)
 					FarmState.CompletedQuest = false
 					getgenv().QuestFarmEnabled = false
 					getgenv().CompletedQuest = false
+					resetQuestFarmToggle()
 					stopQuestNPCView()
 					clearFocusCam(FarmUtil.GetCharacter())
 					if disableNoclip then pcall(disableNoclip) end
@@ -10696,7 +11905,7 @@ return function(Window, player, QuestTab, config)
 			setQuestStatus("Stopped", "Quest Farm is stopped. Your manual quest selection has been kept.")
 			Window:Notify("Quest Farm", "Stopped. Your selected quest was saved.", 3)
 		end
-	end, "Resume the active quest if one exists; otherwise accept and farm the selected target.", "play", true, "Premium")
+	end, "Request the selected quest once, farm its configured objective, turn it in, and recalculate the next target from your level.", "play")
 
 	QuestRight:Divider()
 	local function GetAllNPCs()
@@ -10881,6 +12090,18 @@ local function spawnedItemInfo(obj)
     return nil
 end
 
+local function setBoostedSpawnTarget(itemName, itemPart)
+    if not State.Farm or not Config.Boosted or not itemName or not itemPart
+        or not itemPart.Parent or not itemPart:IsDescendantOf(workspace)
+        or not Farm.allowed(itemName) then
+        return
+    end
+
+    -- React to the instance-added signal directly; this is intentionally not
+    -- throttled by the notification system or the periodic item scanner.
+    Farm.PendingBoostedTarget = itemPart
+end
+
 function Farm.notifySpawnedItem(itemName, itemPart)
     if not itemName or not itemPart then return end
     local spawnKey = itemPart:FindFirstAncestorOfClass("Model") or itemPart
@@ -10906,6 +12127,7 @@ workspace.DescendantAdded:Connect(function(o)
         ItemESP.register(o)
         local itemName, itemPart = spawnedItemInfo(o)
         if itemName then
+            setBoostedSpawnTarget(itemName, itemPart)
             Farm.notifySpawnedItem(itemName, itemPart)
         elseif not Farm.SpawnPromptConnections[o] then
             Farm.SpawnPromptConnections[o] = o:GetPropertyChangedSignal("ObjectText"):Connect(function()
@@ -10918,6 +12140,7 @@ workspace.DescendantAdded:Connect(function(o)
                 local lateName, latePart = spawnedItemInfo(o)
                 if lateName and latePart then
                     ItemESP.register(o)
+                    setBoostedSpawnTarget(lateName, latePart)
                     Farm.notifySpawnedItem(lateName, latePart)
                     local connection = Farm.SpawnPromptConnections[o]
                     if connection then connection:Disconnect() end
@@ -10928,7 +12151,10 @@ workspace.DescendantAdded:Connect(function(o)
     elseif o:IsA("BasePart") then
         ItemESP.register(o)
         local itemName, itemPart = spawnedItemInfo(o)
-        if itemName then Farm.notifySpawnedItem(itemName, itemPart) end
+        if itemName then
+            setBoostedSpawnTarget(itemName, itemPart)
+            Farm.notifySpawnedItem(itemName, itemPart)
+        end
     end
 end)
 
