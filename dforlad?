@@ -526,7 +526,7 @@ end
 
 local Config = {
     TweenSpeed = 220,
-    SafeZone = Vector3.new(5, -33.5, -195),
+    SafeZone = Vector3.new(-212.241150, -33.486183, -283.842651),
     AutoBuyLucky = false,
     LuckyArrowPrice = 75000,
     LuckyArrowItem = "1x Lucky Arrow",
