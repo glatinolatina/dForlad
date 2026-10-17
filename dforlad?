@@ -594,6 +594,8 @@ local State = {
     NotifyItemSpawn = true,
     PlayerEsp = false,
     Farm = false,
+    HalloweenCandyFarm = false,
+    HalloweenTurnInBusy = false,
     NoClip = false,
     TweenRunning = false,
     Selling = false,
@@ -1066,9 +1068,26 @@ function ItemESP.register(obj)
 end
 
 function ItemESP.unregister(part)
+    if not part then return end
     if Tracked[part] then
         ItemESP.remove(part)
         Tracked[part] = nil
+    end
+
+    -- Remove stale reverse mappings too. Without this, a part that temporarily
+    -- disappears/reappears can never be registered again because TrackedRev
+    -- would still claim it had already been processed.
+    for object, mappedPart in pairs(TrackedRev) do
+        if mappedPart == part then
+            TrackedRev[object] = nil
+        end
+    end
+
+    for index = #Pending, 1, -1 do
+        local entry = Pending[index]
+        if entry and entry.part == part then
+            table.remove(Pending, index)
+        end
     end
 end
 
@@ -2424,11 +2443,94 @@ end
 
 local Farm = {}
 
--- Event-driven target handoff for Boosted. A newly spawned item is remembered
--- immediately so the current target can be interrupted on the next Heartbeat.
+function Farm.isActive()
+    return (State.Farm == true or State.HalloweenCandyFarm == true)
+        and State.HalloweenTurnInBusy ~= true
+end
+
+-- Event-driven target handoff for Boosted. Queue every spawn instead of keeping
+-- only one target: several items can replicate in the same frame, and each item
+-- may need a short moment for its part, position, transparency, and prompt to load.
 Farm.PendingBoostedTarget = nil
+Farm.PendingBoostedTargets = {}
+Farm.BoostedTargetQueued = setmetatable({}, {__mode = "k"})
+Farm.BoostedTargetSeen = setmetatable({}, {__mode = "k"})
+Farm.BoostedTargetQueueLifetime = 12
+
+local function refreshPendingBoostedTarget()
+    Farm.PendingBoostedTarget = nil
+    for index = #Farm.PendingBoostedTargets, 1, -1 do
+        local entry = Farm.PendingBoostedTargets[index]
+        if entry and entry.Part and entry.Part.Parent then
+            Farm.PendingBoostedTarget = entry.Part
+            break
+        end
+    end
+end
+
+function Farm.queueBoostedTarget(part)
+    if not part or not part.Parent or not part:IsDescendantOf(workspace) then
+        return false
+    end
+    if Farm.BoostedTargetQueued[part] or Farm.BoostedTargetSeen[part] then
+        return false
+    end
+
+    Farm.BoostedTargetQueued[part] = true
+    Farm.BoostedTargetSeen[part] = true
+    table.insert(Farm.PendingBoostedTargets, {
+        Part = part,
+        AddedAt = os.clock(),
+    })
+    Farm.PendingBoostedTarget = part
+    return true
+end
+
+function Farm.nextReadyBoostedTarget(exceptPart, now, consume)
+    now = now or tick()
+    local queue = Farm.PendingBoostedTargets
+    local currentClock = os.clock()
+
+    -- Drop targets that were removed or never finished replicating. Invalid or
+    -- invisible items are retained briefly instead of being discarded instantly.
+    for index = #queue, 1, -1 do
+        local entry = queue[index]
+        local part = entry and entry.Part
+        local data = part and Tracked[part]
+        local expired = not entry or currentClock - (entry.AddedAt or currentClock) > Farm.BoostedTargetQueueLifetime
+        local disallowed = data and not Farm.allowed(data.Name)
+        if not part or not part.Parent or not part:IsDescendantOf(workspace) or expired or disallowed then
+            if part then Farm.BoostedTargetQueued[part] = nil end
+            table.remove(queue, index)
+        end
+    end
+
+    for index, entry in ipairs(queue) do
+        local part = entry and entry.Part
+        local data = part and Tracked[part]
+        if part and part ~= exceptPart and data
+            and Farm.allowed(data.Name)
+            and Utils.validPos(part) and not Utils.invisible(part)
+            and (not data.FarmRetryAt or data.FarmRetryAt <= now) then
+            if consume then
+                Farm.BoostedTargetQueued[part] = nil
+                table.remove(queue, index)
+                refreshPendingBoostedTarget()
+            end
+            return part, data
+        end
+    end
+
+    refreshPendingBoostedTarget()
+    return nil
+end
 
 function Farm.allowed(name)
+    if State.HalloweenCandyFarm then
+        return name == "Green Candy" or name == "Red Candy"
+            or name == "Blue Candy" or name == "Yellow Candy"
+    end
+
     local filter = Config.FarmOnlyItems
     if not filter or #filter == 0 then return true end
     for _, n in ipairs(filter) do
@@ -2457,29 +2559,17 @@ function Farm.nearest()
     local priorityItem, priorityPart, priorityData, priorityDist = nil, nil, nil, math.huge
     local origin = root.Position
 
-    -- A spawn event outranks a full-table nearest-item scan. Keep it pending if
-    -- the item's part is still loading into Tracked; the event may arrive before
-    -- the server finishes populating the prompt or setting the part's position.
+    -- Prefer the oldest event-queued target that is actually ready. A target
+    -- whose position/transparency/prompt is still replicating stays queued, and
+    -- other ready spawns can still be selected rather than waiting behind it.
     if State.Farm and Config.Boosted then
-        local pending = Farm.PendingBoostedTarget
-        if pending then
-            if not pending.Parent or not pending:IsDescendantOf(workspace) then
-                Farm.PendingBoostedTarget = nil
-            else
-                local data = Tracked[pending]
-                if data then
-                    if not Utils.validPos(pending) or Utils.invisible(pending) or not Farm.allowed(data.Name) then
-                        Farm.PendingBoostedTarget = nil
-                    elseif not data.FarmRetryAt or data.FarmRetryAt <= now then
-                        Farm.PendingBoostedTarget = nil
-                        local candidate = pending:FindFirstAncestorOfClass("Model") or pending
-                        if _G.__PhantomQuestFarmSetItemViewerTarget then
-                            pcall(_G.__PhantomQuestFarmSetItemViewerTarget, candidate)
-                        end
-                        return candidate, pending, data
-                    end
-                end
+        local pending, data = Farm.nextReadyBoostedTarget(nil, now, true)
+        if pending and data then
+            local candidate = pending:FindFirstAncestorOfClass("Model") or pending
+            if _G.__PhantomQuestFarmSetItemViewerTarget then
+                pcall(_G.__PhantomQuestFarmSetItemViewerTarget, candidate)
             end
+            return candidate, pending, data
         end
     end
 
@@ -2526,7 +2616,7 @@ function Farm.waitForArrival(part, timeout)
     local stableFrames = 0
     local settleTime = math.clamp(tonumber(Config.InstantDelay) or 0.35, 0.2, 1.0)
 
-    while State.Farm and part and part.Parent and part:IsDescendantOf(workspace)
+    while Farm.isActive() and part and part.Parent and part:IsDescendantOf(workspace)
         and os.clock() - started < timeout do
         local character = LP.Character
         if not character or character ~= expectedCharacter then return false end
@@ -2556,7 +2646,7 @@ function Farm.waitForArrival(part, timeout)
         -- the game's position/prompt state has time to catch up before pickup.
         if stableFrames >= 5 then
             local settleUntil = os.clock() + settleTime
-            while State.Farm and part and part.Parent and part:IsDescendantOf(workspace)
+            while Farm.isActive() and part and part.Parent and part:IsDescendantOf(workspace)
                 and os.clock() < settleUntil do
                 character = LP.Character
                 if not character or character ~= expectedCharacter then return false end
@@ -2572,7 +2662,7 @@ function Farm.waitForArrival(part, timeout)
                 RunService.Heartbeat:Wait()
             end
 
-            if not State.Farm or not part or not part.Parent or not part:IsDescendantOf(workspace) then
+            if not Farm.isActive() or not part or not part.Parent or not part:IsDescendantOf(workspace) then
                 return false
             end
             character = LP.Character
@@ -2586,7 +2676,7 @@ function Farm.waitForArrival(part, timeout)
                 RunService.Heartbeat:Wait()
             end
 
-            return State.Farm
+            return Farm.isActive()
                 and LP.Character == expectedCharacter
                 and part.Parent ~= nil
                 and part:IsDescendantOf(workspace)
@@ -2681,19 +2771,21 @@ end
 
 function Farm.pickupBoosted(model, part, trackedData)
     if not State.Farm or not Config.Boosted or not model or not model.Parent
-        or not part or not part.Parent or not part:IsDescendantOf(workspace)
-        or Utils.invisible(part) then
+        or not part or not part.Parent or not part:IsDescendantOf(workspace) then
         return false
     end
 
     local expectedCharacter = LP.Character
-    if not expectedCharacter or not Move.telePart(part) then return false end
+    if not expectedCharacter then return false end
 
     local startedAt = os.clock()
     local lastPromptAt = 0
+    local lastSuccessfulTriggerAt = nil
+    local nextPromptAt = 0
     local stableFrames = 0
     local previousAnchors = nil
     local promptInFlight = false
+    local invisibleSince = nil
 
     local R6_BODY_PARTS = {
         "Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg",
@@ -2706,16 +2798,11 @@ function Farm.pickupBoosted(model, part, trackedData)
         "RightUpperLeg", "RightLowerLeg", "RightFoot",
     }
 
-    local function itemGone()
-        return not part or not part.Parent
-            or not part:IsDescendantOf(workspace)
-            or Utils.invisible(part)
-            or (model and not model.Parent)
+    local function itemRemoved()
+        return not part or not part.Parent or not part:IsDescendantOf(workspace)
+            or (model ~= part and model and not model.Parent)
     end
 
-    -- Do not treat a HumanoidRootPart alone as proof that the character has
-    -- arrived. Require a complete standard body rig and verify its parts remain
-    -- close to the root before any pickup prompt can be triggered.
     local function characterSnapshot()
         local character = LP.Character
         if not character or character ~= expectedCharacter
@@ -2744,9 +2831,8 @@ function Farm.pickupBoosted(model, part, trackedData)
         end
 
         local head = character:FindFirstChild("Head")
-        local torso = character:FindFirstChild(
-            humanoid.RigType == Enum.HumanoidRigType.R6 and "Torso" or "UpperTorso"
-        )
+        local torsoName = humanoid.RigType == Enum.HumanoidRigType.R6 and "Torso" or "UpperTorso"
+        local torso = character:FindFirstChild(torsoName)
         if not head or not head:IsA("BasePart") or not torso or not torso:IsA("BasePart") then
             return nil
         end
@@ -2754,18 +2840,51 @@ function Farm.pickupBoosted(model, part, trackedData)
         return character, humanoid, root, head, torso, bodyParts
     end
 
-    local function verifyCharacterAtItem()
+    local function findPrompt()
+        local saved = trackedData and trackedData.Obj
+        if saved and saved.Parent and saved:IsA("ProximityPrompt")
+            and saved:IsDescendantOf(workspace) then
+            return saved
+        end
+
+        for _, object in ipairs({model, part}) do
+            if object and object.Parent then
+                if object:IsA("ProximityPrompt") then return object end
+                local prompt = object:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt then return prompt end
+            end
+        end
+
+        local ancestor = part:FindFirstAncestorOfClass("Model")
+        return ancestor and ancestor:FindFirstChildWhichIsA("ProximityPrompt", true) or nil
+    end
+
+    local function promptAnchor(prompt)
+        if prompt and prompt.Parent then
+            if prompt.Parent:IsA("BasePart") then
+                return prompt.Parent
+            end
+            local ancestorPart = prompt:FindFirstAncestorWhichIsA("BasePart")
+            if ancestorPart then return ancestorPart end
+            local childPart = prompt.Parent:FindFirstChildWhichIsA("BasePart", true)
+            if childPart then return childPart end
+        end
+        return part
+    end
+
+    local function verifyCharacterAtItem(anchor)
         local character, humanoid, root, head, torso, bodyParts = characterSnapshot()
         if not character then return false end
-
-        local targetPosition = part.Position + Vector3.new(0, 3, 0)
-        if (root.Position - targetPosition).Magnitude > 0.2
-            or (part.Position - root.Position).Magnitude > 4.25 then
+        if not anchor or not anchor.Parent or not anchor:IsDescendantOf(workspace) then
             return false
         end
 
-        -- These checks catch partial/lagging rigs and characters whose limbs
-        -- have not followed the root to the target yet.
+        local targetPosition = anchor.Position + Vector3.new(0, 3, 0)
+        if (root.Position - targetPosition).Magnitude > 0.25
+            or (anchor.Position - root.Position).Magnitude > 4.25 then
+            return false
+        end
+
         if (head.Position - root.Position).Magnitude > 8
             or (torso.Position - root.Position).Magnitude > 8 then
             return false
@@ -2795,139 +2914,144 @@ function Farm.pickupBoosted(model, part, trackedData)
         return stable
     end
 
-    local function findPrompt()
-        local saved = trackedData and trackedData.Obj
-        if saved and saved.Parent and saved:IsA("ProximityPrompt") then
-            return saved
-        end
-
-        for _, object in ipairs({model, part}) do
-            if object and object.Parent then
-                if object:IsA("ProximityPrompt") then return object end
-                local prompt = object:FindFirstChildWhichIsA("ProximityPrompt", true)
-                if prompt then return prompt end
-            end
-        end
-
-        local ancestor = part:FindFirstAncestorOfClass("Model")
-        return ancestor and ancestor:FindFirstChildWhichIsA("ProximityPrompt", true) or nil
+    local firstPrompt = findPrompt()
+    local firstAnchor = promptAnchor(firstPrompt)
+    if firstAnchor and firstAnchor.Parent then
+        Move.telePart(firstAnchor)
+    else
+        Move.telePart(part)
     end
 
+    -- Continue tracking while the target is present. The longer timeout is only
+    -- a retry window: a new ready spawn interrupts immediately through the queue.
     while State.Farm and Config.Boosted and LP.Character == expectedCharacter
-        and os.clock() - startedAt < 2.75 do
-        if itemGone() then
+        and os.clock() - startedAt < 4.0 do
+        if itemRemoved() then
             ItemESP.unregister(part)
             return true
         end
 
-        -- A recognized spawn preempts the current lock as soon as it is safely
-        -- targetable. This runs before the normal per-frame alignment, so a new
-        -- item is handed off in at most the next Heartbeat rather than waiting
-        -- for this target's full retry window to end.
-        local pendingSpawn = Farm.PendingBoostedTarget
-        if pendingSpawn and pendingSpawn ~= part
-            and pendingSpawn.Parent and pendingSpawn:IsDescendantOf(workspace) then
-            local pendingData = Tracked[pendingSpawn]
-            if pendingData and Utils.validPos(pendingSpawn) and not Utils.invisible(pendingSpawn)
-                and Farm.allowed(pendingData.Name)
-                and (not pendingData.FarmRetryAt or pendingData.FarmRetryAt <= tick()) then
-                return false
-            end
+        local pendingSpawn = Farm.nextReadyBoostedTarget(part, tick(), false)
+        if pendingSpawn then
+            if trackedData then trackedData.FarmRetryAt = tick() end
+            return false
         end
 
-        local character, humanoid, root, head, torso = characterSnapshot()
-        if character and humanoid and root and head and torso then
-            -- Re-align on every frame. The next pickup attempt is gated on a
-            -- complete rig, exact target proximity, and several stable frames.
-            local targetPosition = part.Position + Vector3.new(0, 3, 0)
-            if (root.Position - targetPosition).Magnitude > 0.04 then
-                root.CFrame = CFrame.new(targetPosition, part.Position)
+        local visibleAndPositioned = Utils.validPos(part) and not Utils.invisible(part)
+        if not visibleAndPositioned then
+            stableFrames = 0
+            previousAnchors = nil
+            local nowInvisible = os.clock()
+            invisibleSince = invisibleSince or nowInvisible
+
+            -- Only treat an item becoming invisible as a completed pickup after a
+            -- prompt activation actually succeeded. Spawn-time invisibility is
+            -- tolerated while replication finishes, instead of dropping the item.
+            if lastSuccessfulTriggerAt and nowInvisible - lastSuccessfulTriggerAt >= 0.15
+                and nowInvisible - invisibleSince >= 0.12 then
+                ItemESP.unregister(part)
+                return true
             end
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
+            RunService.Heartbeat:Wait()
+        else
+            invisibleSince = nil
+            local prompt = findPrompt()
+            local anchor = promptAnchor(prompt)
+            local character, humanoid, root, head, torso = characterSnapshot()
 
-            local verified, verifiedCharacter, verifiedHumanoid, verifiedRoot,
-                verifiedHead, verifiedTorso = verifyCharacterAtItem()
-            if verified and verifiedCharacter == expectedCharacter
-                and verifiedHumanoid.Health > 0 then
-                if anchorsAreStable(verifiedRoot, verifiedHead, verifiedTorso) then
-                    stableFrames += 1
-                else
-                    stableFrames = 0
+            if character and humanoid and root and head and torso and anchor and anchor.Parent then
+                local targetPosition = anchor.Position + Vector3.new(0, 3, 0)
+                if (root.Position - targetPosition).Magnitude > 0.04 then
+                    root.CFrame = CFrame.new(targetPosition)
                 end
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
 
-                local now = os.clock()
-                if stableFrames >= 3 and not promptInFlight and now - lastPromptAt >= 0.05 then
-                    local prompt = findPrompt()
-                    if prompt and prompt.Parent and prompt:IsA("ProximityPrompt") and prompt.Enabled ~= false then
-                        local promptPart = prompt.Parent:IsA("BasePart") and prompt.Parent
-                            or prompt.Parent:FindFirstChildWhichIsA("BasePart", true)
-                        local referencePart = promptPart or part
+                local verified, verifiedCharacter, verifiedHumanoid,
+                    verifiedRoot, verifiedHead, verifiedTorso = verifyCharacterAtItem(anchor)
+                if verified and verifiedCharacter == expectedCharacter and verifiedHumanoid.Health > 0 then
+                    if anchorsAreStable(verifiedRoot, verifiedHead, verifiedTorso) then
+                        stableFrames += 1
+                    else
+                        stableFrames = 0
+                    end
+
+                    local now = os.clock()
+                    if prompt and prompt.Parent and prompt:IsA("ProximityPrompt")
+                        and prompt.Enabled ~= false and stableFrames >= 3
+                        and not promptInFlight and now >= nextPromptAt then
+                        local referencePart = promptAnchor(prompt)
                         local maxDistance = math.max(0, tonumber(prompt.MaxActivationDistance) or 10)
                         local distance = referencePart and referencePart.Parent
                             and (referencePart.Position - verifiedRoot.Position).Magnitude or math.huge
 
-                        -- Enforce the prompt's own activation range as well as
-                        -- a close physical range; never collect from a remote position.
                         if referencePart and referencePart.Parent
-                            and distance <= maxDistance + 0.1
-                            and distance <= 4.25 then
+                            and distance <= maxDistance + 0.1 and distance <= 4.25 then
                             promptInFlight = true
                             lastPromptAt = now
                             task.spawn(function()
-                                -- The complete character has already passed the rig,
-                                -- alignment, and stability checks. Hold for 0.25 seconds
-                                -- before the final verification and pickup attempt.
-                                task.wait(0.25)
-                                pcall(function()
-                                    -- Re-verify after the delay, immediately before
-                                    -- triggering, so a stale position cannot collect it.
-                                    local finalVerified, finalCharacter, finalHumanoid, finalRoot = verifyCharacterAtItem()
+                                -- The user-requested 0.25-second delay remains in
+                                -- place while the outer Heartbeat loop keeps locking.
+                                task.wait(0.27)
+                                local callbackOk, callbackErr = pcall(function()
+                                    local currentPromptAnchor = promptAnchor(prompt)
+                                    local finalVerified, finalCharacter, finalHumanoid, finalRoot =
+                                        verifyCharacterAtItem(currentPromptAnchor)
+                                    local readySpawn = Farm.nextReadyBoostedTarget(part, tick(), false)
                                     local stillValid = State.Farm and Config.Boosted
-                                        and not itemGone()
-                                        and prompt.Parent ~= nil and prompt.Enabled ~= false
+                                        and not itemRemoved()
+                                        and Utils.validPos(part) and not Utils.invisible(part)
+                                        and prompt.Parent ~= nil and prompt:IsDescendantOf(workspace)
+                                        and prompt.Enabled ~= false
                                         and finalVerified and finalCharacter == expectedCharacter
                                         and finalHumanoid.Health > 0
+                                        and readySpawn == nil
+
                                     if stillValid then
-                                        local currentPromptPart = prompt.Parent:IsA("BasePart") and prompt.Parent
-                                            or prompt.Parent:FindFirstChildWhichIsA("BasePart", true)
-                                        local currentReference = currentPromptPart or part
-                                        local currentMax = math.max(0, tonumber(prompt.MaxActivationDistance) or 10)
+                                        local currentReference = promptAnchor(prompt)
+                                        local currentMaxDistance = math.max(0, tonumber(prompt.MaxActivationDistance) or 10)
                                         local currentDistance = currentReference and currentReference.Parent
                                             and (currentReference.Position - finalRoot.Position).Magnitude or math.huge
                                         stillValid = currentReference ~= nil and currentReference.Parent ~= nil
-                                            and currentDistance <= currentMax + 0.1
+                                            and currentDistance <= currentMaxDistance + 0.1
                                             and currentDistance <= 4.25
                                     end
 
                                     if stillValid then
-                                        pcall(Farm.triggerPickupPrompt, prompt)
+                                        local fired = Farm.triggerPickupPrompt(prompt)
+                                        if fired then
+                                            lastSuccessfulTriggerAt = os.clock()
+                                        end
                                     end
                                 end)
+                                if not callbackOk then
+                                    warn("[Methion] Boosted pickup check failed: " .. tostring(callbackErr))
+                                end
                                 promptInFlight = false
+                                nextPromptAt = os.clock() + 0.06
                             end)
                         end
                     end
+                else
+                    stableFrames = 0
+                    previousAnchors = nil
                 end
             else
                 stableFrames = 0
                 previousAnchors = nil
             end
-        else
-            stableFrames = 0
-            previousAnchors = nil
-        end
 
-        RunService.Heartbeat:Wait()
+            RunService.Heartbeat:Wait()
+        end
     end
 
-    if itemGone() then
+    if itemRemoved() then
         ItemESP.unregister(part)
         return true
     end
 
     if trackedData and Config.Boosted then
-        trackedData.FarmRetryAt = tick() + 0.15
+        trackedData.FarmRetryAt = tick() + 0.08
     end
     return false
 end
@@ -2968,7 +3092,7 @@ function Farm.pickupTween(model, part, trackedData)
         local started = tick()
         local lastPromptAt = 0
 
-        while State.Farm and model and model.Parent and part and part.Parent
+        while Farm.isActive() and model and model.Parent and part and part.Parent
             and part:IsDescendantOf(workspace) and tick() - started < 3.5 do
             local character = LP.Character
             local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -3056,17 +3180,19 @@ local function moveToSafeIfNeeded()
 end
 
 function Farm.tick()
+    if State.HalloweenTurnInBusy then return end
+
     -- Selling uses LP.Character and the real inventory. Keep any existing
     -- visual decoy and its camera until the sell transaction fully finishes,
     -- even if Auto Farm is toggled off during the transaction.
     if State.Selling then
-        if State.Farm and bypassSupported and Config.FarmTeleportMode == "instant" and not FarmVisual.isActive() then
+        if Farm.isActive() and bypassSupported and Config.FarmTeleportMode == "instant" and not FarmVisual.isActive() then
             FarmVisual.showSafeZoneDecoy()
         end
         return
     end
 
-    if not State.Farm then
+    if not Farm.isActive() then
         if FarmVisual.Decoy then FarmVisual.restoreAtSafe() end
         return
     end
@@ -3089,11 +3215,15 @@ function Farm.tick()
 
     local item, trackedPart, trackedData = Farm.nearest()
     if item then
-        -- Leave part selection and pickup logic for Instant mode unchanged.
-        local part = item:IsA("BasePart") and item or item:FindFirstChildWhichIsA("BasePart", true)
+        -- Boosted must use the exact tracked item part from the spawn/ESP record.
+        -- Picking the first BasePart inside a Model can lock onto an unrelated limb
+        -- or decorative part and make proximity verification fail intermittently.
+        local part = Config.Boosted and trackedPart and trackedPart.Parent
+            and trackedPart:IsDescendantOf(workspace) and trackedPart
+            or (item:IsA("BasePart") and item or item:FindFirstChildWhichIsA("BasePart", true))
         if instantMode then
             if part then
-                if Config.Boosted then
+                if Config.Boosted and State.Farm then
                     Farm.pickupBoosted(item, part, trackedData)
                     if not part.Parent or not part:IsDescendantOf(workspace) or Utils.invisible(part) then
                         ItemESP.unregister(part)
@@ -3123,7 +3253,7 @@ function Farm.tick()
                     CFrame.new(targetPart.Position + Vector3.new(0, 3, 0)),
                     Config.TweenSpeed,
                     function()
-                        return State.Farm
+                        return Farm.isActive()
                             and targetPart.Parent ~= nil
                             and targetPart:IsDescendantOf(workspace)
                             and (not item or item.Parent ~= nil)
@@ -3146,7 +3276,7 @@ function Farm.tick()
                 -- the roam so the next farm pass can approach it instead.
                 local roamPos = Vector3.new(math.random(-560, 560), 100, math.random(-600, 580))
                 Move.flyCF(CFrame.new(roamPos), Config.TweenSpeed, function()
-                    return State.Farm and Farm.nearest() == nil
+                    return Farm.isActive() and Farm.nearest() == nil
                 end)
                 task.wait(0.1)
             end
@@ -3158,7 +3288,7 @@ function Farm.tick()
             -- Roaming replaces repeatedly flying to the same fixed safe-zone point.
             local roamPos = Vector3.new(math.random(-560, 560), 100, math.random(-600, 580))
             Move.flyCF(CFrame.new(roamPos), Config.TweenSpeed, function()
-                return State.Farm and Farm.nearest() == nil
+                return Farm.isActive() and Farm.nearest() == nil
             end)
             task.wait(0.1)
         end
@@ -3667,7 +3797,7 @@ end
 function Loops.farm()
     task.spawn(function()
         while true do
-            if State.Farm and bypassSupported and Config.FarmTeleportMode == "instant" then
+            if Farm.isActive() and bypassSupported and Config.FarmTeleportMode == "instant" then
                 -- Instant mode already yields while teleporting/picking up, so use
                 -- a frame-sized idle yield instead of adding another 0.1 seconds.
                 Farm.tick()
@@ -3718,7 +3848,7 @@ end
 function Loops.pending()
     task.spawn(function()
         while true do
-            if State.Farm and bypassSupported and Config.FarmTeleportMode == "instant" then
+            if Farm.isActive() and bypassSupported and Config.FarmTeleportMode == "instant" then
                 RunService.Heartbeat:Wait()
             else
                 task.wait(.2)
@@ -5994,6 +6124,201 @@ _G.__PhantomQuestFarmTab = Window:Tab({
     Icon = "swords",
     Desc = "Quest automation and selected NPC farming.",
 })
+local HalloweenTab = Window:Tab({
+    Title = "Halloween Event",
+    Icon = "ghost",
+    Desc = "Collect Halloween candy and automatically turn it in to Jack.",
+})
+
+local Halloween = {
+    AutoTurnIn = true,
+    TurnInThreshold = 20,
+    TurnInBusy = false,
+    LastTurnInAt = 0,
+    StatusLabel = nil,
+}
+
+local HALLOWEEN_CANDY_NAMES = {
+    "Green Candy",
+    "Red Candy",
+    "Blue Candy",
+    "Yellow Candy",
+}
+
+function Halloween.countCandies()
+    local total = 0
+    for _, candyName in ipairs(HALLOWEEN_CANDY_NAMES) do
+        total += countInventoryName(candyName)
+    end
+    return total
+end
+
+local function halloweenNotify(title, message, notificationType)
+    pcall(function()
+        AirflowCompat:Notify({
+            Title = title or "Halloween Event",
+            Content = message or "",
+            Type = notificationType or "Info",
+            Duration = 4,
+        })
+    end)
+end
+
+local function turnInHalloweenCandies()
+    if Halloween.TurnInBusy or State.HalloweenTurnInBusy then
+        return false, "A candy turn-in is already running."
+    end
+    if State.Selling then
+        return false, "Wait until selling finishes first."
+    end
+    if Gui.currentDialogue() then
+        return false, "Close the current NPC dialogue before turning in candy."
+    end
+
+    local candyCount = Halloween.countCandies()
+    if candyCount <= 0 then
+        return false, "You do not have any candy to turn in."
+    end
+
+    local character = LP.Character
+    local remote = character and character:FindFirstChild("RemoteEvent")
+    local dialogueFolder = ReplicatedStorage:FindFirstChild("Dialogue")
+    local dialogueTemplate = dialogueFolder and dialogueFolder:FindFirstChild("Halloween Event")
+    if not remote or not remote:IsA("RemoteEvent") or not dialogueTemplate then
+        return false, "Halloween Event dialogue or the character RemoteEvent is unavailable."
+    end
+
+    Halloween.TurnInBusy = true
+    State.HalloweenTurnInBusy = true
+    local success = false
+    local failureReason = "Could not select the candy turn-in option."
+
+    local ok, err = pcall(function()
+        remote:FireServer("PromptTriggered", dialogueTemplate)
+        local dialogue = Gui.waitDialogue(4)
+        if not dialogue or not Gui.dialogueActive(dialogue) then
+            failureReason = "Jack's dialogue did not open."
+            return
+        end
+
+        if not Gui.waitAndClickOption("Option2", 5) then
+            failureReason = "The second dialogue option was not available."
+            return
+        end
+
+        success = true
+        Halloween.LastTurnInAt = tick()
+    end)
+
+    Halloween.TurnInBusy = false
+    State.HalloweenTurnInBusy = false
+
+    if not ok then
+        return false, "Turn-in failed: " .. tostring(err)
+    end
+    return success, success and ("Turn-in requested for " .. tostring(candyCount) .. " candies.") or failureReason
+end
+
+local HalloweenCollection = HalloweenTab:Section({Title = "Candy Collection", Side = "left"})
+HalloweenCollection:Paragraph({
+    Title = "Auto Collect Candies",
+    Desc = "Collects only Green, Red, Blue, and Yellow Candy. Other items are ignored while this toggle is enabled.",
+})
+HalloweenCollection:Toggle({
+    Title = "Auto Collect Candies",
+    Desc = "Automatically collect only Halloween candy using the current farm movement mode.",
+    Icon = "candy",
+    Value = false,
+    Callback = function(state)
+        State.HalloweenCandyFarm = state == true
+        if State.HalloweenCandyFarm then
+            State.NoClip = true
+            ItemESP.scan()
+        elseif not State.Farm then
+            State.NoClip = false
+        end
+        halloweenNotify("Halloween Event", State.HalloweenCandyFarm and "Candy-only collection enabled." or "Candy-only collection disabled.")
+    end,
+})
+
+local HalloweenTurnInSection = HalloweenTab:Section({Title = "Candy Turn-In", Side = "right"})
+HalloweenTurnInSection:Input({
+    Title = "Candy Turn-In Threshold",
+    Desc = "Automatically turn in once your total candy reaches this amount. Range: 1–45.",
+    Placeholder = "20",
+    Value = "20",
+    Callback = function(value)
+        local amount = tonumber(value)
+        if amount then
+            Halloween.TurnInThreshold = math.clamp(math.floor(amount), 1, 45)
+        end
+    end,
+})
+HalloweenTurnInSection:Toggle({
+    Title = "Auto Turn In Candies",
+    Desc = "Opens Jack's Halloween dialogue and selects the second option when your candy reaches the threshold.",
+    Icon = "message-circle",
+    Value = true,
+    Callback = function(state)
+        Halloween.AutoTurnIn = state == true
+        halloweenNotify("Halloween Event", Halloween.AutoTurnIn and "Automatic candy turn-in enabled." or "Automatic candy turn-in disabled.")
+    end,
+})
+HalloweenTurnInSection:Button({
+    Title = "Turn In Candies Now",
+    Desc = "Open Jack's dialogue and select the second option once.",
+    Icon = "gift",
+    Callback = function()
+        task.spawn(function()
+            local success, message = turnInHalloweenCandies()
+            halloweenNotify("Halloween Event", message, success and "Success" or "Warning")
+        end)
+    end,
+})
+Halloween.StatusLabel = HalloweenTurnInSection:Paragraph({
+    Title = "Candy Inventory",
+    Desc = "Counting candy in your character and backpack...",
+})
+
+task.spawn(function()
+    local lastStatusUpdate = 0
+    while true do
+        task.wait(0.4)
+
+        local candyCount = Halloween.countCandies()
+        if Halloween.StatusLabel and tick() - lastStatusUpdate >= 0.8 then
+            lastStatusUpdate = tick()
+            pcall(function()
+                Halloween.StatusLabel:SetDesc(string.format(
+                    "%d / 45 candies in inventory. Auto turn-in threshold: %d.",
+                    candyCount,
+                    math.clamp(tonumber(Halloween.TurnInThreshold) or 20, 1, 45)
+                ))
+            end)
+        end
+
+        local threshold = math.clamp(math.floor(tonumber(Halloween.TurnInThreshold) or 20), 1, 45)
+        if Halloween.AutoTurnIn and candyCount >= threshold
+            and not Halloween.TurnInBusy and not State.Selling
+            and tick() - (Halloween.LastTurnInAt or 0) >= 1.0 then
+            local startingCount = candyCount
+            local success, message = turnInHalloweenCandies()
+            if success then
+                halloweenNotify("Halloween Event", message, "Success")
+                local waitUntil = tick() + 5
+                repeat
+                    task.wait(0.2)
+                until not Halloween.AutoTurnIn
+                    or Halloween.countCandies() < startingCount
+                    or tick() >= waitUntil
+                task.wait(1.0)
+            elseif Halloween.AutoTurnIn then
+                task.wait(2.0)
+            end
+        end
+    end
+end)
+
 local FarmAutomation = FarmTab:Section({Title = "Automation", Side = "left"})
 FarmAutomation:Toggle({
     Title = "Auto Farm",
@@ -6006,6 +6331,10 @@ FarmAutomation:Toggle({
             State.NoClip = true
             ItemESP.scan()
         else
+            if State.HalloweenCandyFarm then
+                State.NoClip = true
+                return
+            end
             if FarmVisual.Decoy and not State.Selling then FarmVisual.restoreAtSafe() end
             State.NoClip = false
             local c = LP.Character
@@ -9631,7 +9960,7 @@ _G.__MethionSettingsSections.Movement:Paragraph({
 })
 _G.__MethionSettingsSections.Movement:Toggle({
     Title = "Boosted",
-    Desc = "Locks on every frame; verifies the full rig, waits 0.25s, then re-verifies before pickup. WARNING: may cause frequent kicks/disconnects. Instant mode only.",
+    Desc = "Queues item spawn events, waits for parts/prompts to replicate, keeps lock-on through retries, verifies the full rig, waits 0.25s, then re-verifies before pickup. WARNING: may cause frequent kicks/disconnects. Instant mode only.",
     Icon = "zap",
     Value = false,
     Callback = function(state)
@@ -9749,11 +10078,11 @@ do
         Desc = "Hook support differs by executor. The diagnostic section shows whether the Returner hook was installed; a successful hook does not guarantee every executor-specific feature is supported.",
     })
 
-    aboutSection:Paragraph({Title = "Project", Desc = "Methion  |  Advanced YBA multi-functions script"})
-    aboutSection:Paragraph({Title = "Version", Desc = "1.1"})
+    aboutSection:Paragraph({Title = "Project", Desc = "Methion"})
+    aboutSection:Paragraph({Title = "Version", Desc = "1.2"})
     aboutSection:Paragraph({Title = "Owner / Author", Desc = "Diablo"})
-    aboutSection:Paragraph({Title = "Interface and Lua Work", Desc = "azurey"})
-    aboutSection:Paragraph({Title = "Usage Note", Desc = "Some functions rely on game objects and executor capabilities being available in the current session."})
+    aboutSection:Paragraph({Title = "Interface and Lua Work", Desc = "Diablo"})
+    aboutSection:Paragraph({Title = "Credit", Desc = "redikXrbs."})
 
     function dashboard:Refresh()
         local character = LP.Character
@@ -10085,7 +10414,7 @@ _G.__PhantomQuestFarmConfig = {
     end,
     canStart = function()
         local env = type(getgenv) == "function" and getgenv() or _G
-        return not State.Farm
+        return not State.Farm and not State.HalloweenCandyFarm
             and not State.Selling
             and not (env and (env.autoPrestigeEnabled or env.autoPrestigeBusy))
     end,
@@ -10313,14 +10642,27 @@ return function(Window, player, QuestTab, config)
 	local function setQuestStatus(phase, message)
 		local nextPhase = tostring(phase or "Ready")
 		local nextMessage = tostring(message or "")
-		if QuestRuntime.Phase == nextPhase and QuestRuntime.Message == nextMessage then return end
-		QuestRuntime.Phase = nextPhase
-		QuestRuntime.Message = nextMessage
-		pcall(function()
-			if QuestStatusLabel and QuestStatusLabel.SetDesc then
-				QuestStatusLabel:SetDesc(QuestRuntime.Message)
-			end
-		end)
+		local changed = QuestRuntime.Phase ~= nextPhase or QuestRuntime.Message ~= nextMessage
+		if changed then
+			QuestRuntime.Phase = nextPhase
+			QuestRuntime.Message = nextMessage
+			pcall(function()
+				if QuestStatusLabel and QuestStatusLabel.SetDesc then
+					QuestStatusLabel:SetDesc(QuestRuntime.Message)
+				end
+			end)
+		end
+
+		-- Keep both Quest Controller rows on the exact same farming snapshot.
+		-- Sync even when the status text has not changed, because the progress row
+		-- may have been refreshed by another update between status ticks.
+		if nextPhase == "Farming selected target" then
+			pcall(function()
+				if QuestProgressLabel and QuestProgressLabel.SetDesc then
+					QuestProgressLabel:SetDesc(nextMessage)
+				end
+			end)
+		end
 	end
 
 	local QuestNPCView = {
@@ -10606,16 +10948,13 @@ return function(Window, player, QuestTab, config)
 			or {"accept", "take quest", "help", "start", "begin", "yes", "quest", "sure", "okay", "ok", "ready", "do it"}
 
 		local negative = {"no thanks", "not now", "don't", "do not", "decline", "cancel", "leave", "later", "never mind", "no, "}
-		local firstName, firstButton, firstScore = nil, nil, -math.huge
+		local firstSafeName, firstSafeButton = nil, nil
+		local bestName, bestButton, bestScore = nil, nil, 0
 
 		for optionIndex = 1, 8 do
 			local optionName = "Option" .. tostring(optionIndex)
 			local button = QuestDialogueBridge.option and QuestDialogueBridge.option(gui, optionName)
 			if button and button.Parent and QuestDialogueBridge.isVisible and QuestDialogueBridge.isVisible(button) then
-				if not firstButton then
-					firstName, firstButton = optionName, button
-				end
-
 				local text = questOptionText(button)
 				local score = 0
 				for _, word in ipairs(positive) do
@@ -10624,13 +10963,35 @@ return function(Window, player, QuestTab, config)
 				for _, word in ipairs(negative) do
 					if containsDialoguePhrase(text, word) then score = score - 5 end
 				end
-				if score > firstScore then
-					firstName, firstButton, firstScore = optionName, button, score
+
+				-- A zero-score option is a safe fallback only when its text is neutral or unavailable.
+				-- Explicit decline/cancel options are never selected as a fallback.
+				if score >= 0 then
+					if not firstSafeButton then
+						firstSafeName, firstSafeButton = optionName, button
+					end
+					if score > bestScore then
+						bestName, bestButton, bestScore = optionName, button, score
+					end
 				end
 			end
 		end
 
-		return firstName, firstButton
+		return bestName or firstSafeName, bestButton or firstSafeButton
+	end
+
+	local function questDialogueSignature(gui)
+		if not gui then return "" end
+		local pieces = {}
+		for _, child in ipairs(gui:GetDescendants()) do
+			if (child:IsA("TextLabel") or child:IsA("TextButton") or child:IsA("TextBox"))
+				and child.Text and child.Text ~= ""
+				and (not QuestDialogueBridge.isVisible or QuestDialogueBridge.isVisible(child)) then
+				table.insert(pieces, child.Name .. "=" .. tostring(child.Text))
+			end
+		end
+		table.sort(pieces)
+		return table.concat(pieces, "\30")
 	end
 
 	local function driveQuestDialogue(NPC, mode)
@@ -10701,34 +11062,50 @@ return function(Window, player, QuestTab, config)
 		local actionCount = 0
 		local clickedAny = false
 		local sawGui = false
+		local lastActionSignature = nil
+		local lastActionTarget = nil
+		local lastActionAt = 0
 
-		while tick() < deadline and actionCount < 32 and FarmState.Active do
+		while tick() < deadline and actionCount < 12 and FarmState.Active do
 			if isSelling() then return false end
 			gui = QuestDialogueBridge.currentDialogue and QuestDialogueBridge.currentDialogue()
 			if gui then
 				sawGui = true
+				local signature = questDialogueSignature(gui)
 				local optionName, target = chooseQuestOption(gui, mode)
-				if target and optionName then
-					local clicked = false
-					if QuestDialogueBridge.click then clicked = QuestDialogueBridge.click(target) == true end
-					if not clicked and QuestDialogueBridge.waitAndClickOption then
-						clicked = QuestDialogueBridge.waitAndClickOption(optionName, 0.8) == true
+				if signature == lastActionSignature and target == lastActionTarget then
+					-- The same button is still on the same page. Never click it repeatedly.
+					if tick() - lastActionAt >= 2 then
+						if QuestRuntime.DialogueTarget == NPC.Name then QuestRuntime.DialogueTarget = nil end
+						return clickedAny
 					end
+					task.wait(0.08)
+				else
+					local clicked = false
+					if target and optionName then
+						if QuestDialogueBridge.click then clicked = QuestDialogueBridge.click(target) == true end
+						if not clicked and QuestDialogueBridge.waitAndClickOption then
+							clicked = QuestDialogueBridge.waitAndClickOption(optionName, 0.8) == true
+						end
+					else
+						if QuestDialogueBridge.skipClick then
+							pcall(QuestDialogueBridge.skipClick)
+							clicked = true
+						elseif QuestDialogueBridge.waitAndClickOption then
+							clicked = QuestDialogueBridge.waitAndClickOption("Option1", 0.5) == true
+						end
+					end
+
 					if clicked then
-						clickedAny = true
+						if target and optionName then clickedAny = true end
+						lastActionSignature = signature
+						lastActionTarget = target
+						lastActionAt = tick()
 						actionCount = actionCount + 1
 						task.wait(0.16)
 					else
 						task.wait(0.08)
 					end
-				else
-					if QuestDialogueBridge.skipClick then
-						QuestDialogueBridge.skipClick()
-					elseif QuestDialogueBridge.waitAndClickOption then
-						QuestDialogueBridge.waitAndClickOption("Option1", 0.5)
-					end
-					actionCount = actionCount + 1
-					task.wait(0.16)
 				end
 			elseif sawGui then
 				task.wait(0.2)
@@ -11290,6 +11667,11 @@ return function(Window, player, QuestTab, config)
 		local acceptAttempted = false
 		local turnInRetryAt = 0
 		local turnInStartedAt = nil
+		local turnInAttempted = false
+		local turnInInteracted = false
+		local turnInStartProgress = 0
+		local turnInStartMaximum = 0
+		local trackedQuestMaximum = 0
 		local ignoreProgressCompletionUntil = 0
 
 		local function questProgressValues()
@@ -11297,6 +11679,25 @@ return function(Window, player, QuestTab, config)
 			local progress = stats and stats:FindFirstChild("QuestProgress")
 			local maximum = stats and stats:FindFirstChild("QuestMaxProgress")
 			return tonumber(progress and progress.Value) or 0, tonumber(maximum and maximum.Value) or 0
+		end
+
+		local function displayQuestProgressValues()
+			local progress, maximum = questProgressValues()
+			if tick() < ignoreProgressCompletionUntil and not FarmState.CompletedQuest then
+				-- Do not show the previous quest's counter while the next quest loads.
+				return 0, math.max(maximum, trackedQuestMaximum, 0)
+			end
+			if acceptAttempted and maximum > 0 then
+				trackedQuestMaximum = math.max(trackedQuestMaximum, maximum)
+			end
+			-- Some quest stats briefly report a maximum below the final kill count.
+			-- Keep the greatest maximum seen this cycle and never display progress > maximum.
+			local displayMaximum = math.max(maximum, trackedQuestMaximum, progress, 0)
+			local displayProgress = math.max(0, progress)
+			if displayMaximum > 0 then
+				displayProgress = math.min(displayProgress, displayMaximum)
+			end
+			return displayProgress, displayMaximum
 		end
 
 		local function isValidQuest(name)
@@ -11315,17 +11716,25 @@ return function(Window, player, QuestTab, config)
 		end
 
 		local function updateProgressLabel()
-			UpdateQuestStatusLabel()
-			local progress, maximum = questProgressValues()
+			local progress, maximum = displayQuestProgressValues()
 			local detail = tostring(activeTarget or "No quest selected")
-			if maximum > 0 then
+			local questData = activeTarget and QuestInfo[activeTarget]
+
+			if questData and questData.Enemy then
+				detail ..= "  •  target: " .. tostring(questData.Enemy)
+				if maximum > 0 then
+					detail ..= "  •  " .. tostring(progress) .. "/" .. tostring(maximum)
+				end
+			elseif questData and questData.Item then
+				local count = FarmUtil.CountItem(questData.Item)
+				detail ..= "  •  " .. tostring(count) .. "/" .. tostring(questData.Amount) .. " " .. tostring(questData.Item)
+			elseif maximum > 0 then
 				detail ..= "  •  " .. tostring(progress) .. "/" .. tostring(maximum)
 			end
-			pcall(function()
-				if QuestProgressLabel and QuestProgressLabel.SetDesc then
-					QuestProgressLabel:SetDesc(detail)
-				end
-			end)
+
+			-- Publish one authoritative string to Automation Status and Selected Target.
+			-- This prevents the two rows from sampling progress at different moments.
+			setQuestStatus("Farming selected target", detail)
 		end
 
 		local function assignNextTarget()
@@ -11342,6 +11751,12 @@ return function(Window, player, QuestTab, config)
 			acceptAttempted = false
 			turnInRetryAt = 0
 			turnInStartedAt = nil
+			turnInAttempted = false
+			turnInInteracted = false
+			turnInStartProgress = 0
+			turnInStartMaximum = 0
+			trackedQuestMaximum = 0
+			ignoreProgressCompletionUntil = tick() + 1.25
 			setQuestStatus("Quest target selected", "Target: " .. tostring(nextQuest) .. ". Quest Farm will open this giver once, then farm its configured objective.")
 			return true
 		end
@@ -11373,7 +11788,7 @@ return function(Window, player, QuestTab, config)
 		end
 
 		local function clearFinishedTarget(questName)
-			setQuestStatus("Quest turn-in handled", "Finished the " .. tostring(questName) .. " cycle. Recalculating the next target from your current level.")
+			setQuestStatus("Quest cycle handled", "Finished the " .. tostring(questName) .. " cycle. Preparing the next quest request.")
 			activeTarget = nil
 			FarmState.CurrentQuest = nil
 			QuestRuntime.ActiveQuest = nil
@@ -11382,11 +11797,36 @@ return function(Window, player, QuestTab, config)
 			acceptAttempted = false
 			turnInRetryAt = 0
 			turnInStartedAt = nil
+			turnInAttempted = false
+			turnInInteracted = false
+			turnInStartProgress = 0
+			turnInStartMaximum = 0
+			trackedQuestMaximum = 0
 			ignoreProgressCompletionUntil = tick() + 1.25
 		end
 
 		local function attemptTurnIn(questName)
-			if tick() < turnInRetryAt or isSelling() then return false end
+			if isSelling() then return false end
+
+			local currentProgress, currentMaximum = questProgressValues()
+			if turnInAttempted then
+				local progressReset = turnInStartMaximum > 0
+					and (currentMaximum < turnInStartMaximum or currentProgress < turnInStartProgress)
+				if progressReset then
+					clearFinishedTarget(questName)
+					return true
+				end
+				if turnInStartedAt and turnInInteracted and tick() - turnInStartedAt >= 3.5 then
+					clearFinishedTarget(questName)
+					return true
+				end
+				if turnInStartedAt and not turnInInteracted and tick() - turnInStartedAt >= 5 then
+					setQuestStatus("Turn-in needs attention", "The completion dialogue was attempted once but did not confirm. It will not reopen repeatedly. Toggle Quest Farm off and on to retry.")
+				end
+				return false
+			end
+
+			if tick() < turnInRetryAt then return false end
 			local dialogues = workspace:FindFirstChild("Dialogues")
 			local npc = dialogues and dialogues:FindFirstChild(questName)
 			if not npc then
@@ -11395,32 +11835,34 @@ return function(Window, player, QuestTab, config)
 				return false
 			end
 
-			if not turnInStartedAt then turnInStartedAt = tick() end
-			local beforeProgress, beforeMaximum = questProgressValues()
-			QuestRuntime.LastTurnInAttempt = tick()
-			setQuestStatus("Turning in quest", "Opening " .. tostring(questName) .. " to claim the completed objective.")
+			turnInStartedAt = tick()
+			turnInStartProgress = currentProgress
+			turnInStartMaximum = currentMaximum
+			turnInAttempted = true
+			turnInInteracted = false
+			QuestRuntime.LastTurnInAttempt = turnInStartedAt
+			setQuestStatus("Turning in quest", "The objective is complete. Opening " .. tostring(questName) .. " once to claim the reward.")
 			local ok, interacted = pcall(TurnInQuest, npc)
 			if not ok then
 				warn("[Quest Farm] Turn-in attempt failed: " .. tostring(interacted))
 				interacted = false
 			end
+			turnInInteracted = interacted == true
 			task.wait(0.65)
 			local afterProgress, afterMaximum = questProgressValues()
-			local progressReset = beforeMaximum > 0
-				and (afterMaximum < beforeMaximum or afterProgress < beforeProgress)
+			local progressReset = turnInStartMaximum > 0
+				and (afterMaximum < turnInStartMaximum or afterProgress < turnInStartProgress)
 
-			if progressReset or (beforeMaximum <= 0 and interacted == true) then
+			if progressReset or (turnInStartMaximum <= 0 and turnInInteracted) then
 				clearFinishedTarget(questName)
 				return true
 			end
 
-			if interacted == true and turnInStartedAt and tick() - turnInStartedAt >= 3.5 then
-				clearFinishedTarget(questName)
-				return true
+			if turnInInteracted then
+				setQuestStatus("Waiting for turn-in", "The turn-in option was selected once. Waiting for the counter to reset without reopening the dialogue.")
+			else
+				setQuestStatus("Turn-in attempted once", "The completion dialogue did not confirm a selection. Waiting without reopening the giver repeatedly.")
 			end
-
-			turnInRetryAt = tick() + 1.5
-			setQuestStatus("Waiting for turn-in", "The NPC interaction was attempted. Waiting briefly for the progress counter to reset before changing targets.")
 			return false
 		end
 
@@ -11489,6 +11931,9 @@ return function(Window, player, QuestTab, config)
 			end
 
 			local progress, maximum = questProgressValues()
+			if acceptAttempted and maximum > 0 and tick() >= ignoreProgressCompletionUntil then
+				trackedQuestMaximum = math.max(trackedQuestMaximum, maximum)
+			end
 			local complete = FarmState.CompletedQuest == true
 			if maximum > 0 and progress >= maximum and tick() >= ignoreProgressCompletionUntil then
 				complete = true
@@ -11502,6 +11947,7 @@ return function(Window, player, QuestTab, config)
 			if complete then
 				FarmState.CompletedQuest = true
 				getgenv().CompletedQuest = true
+				if not turnInAttempted then updateProgressLabel() end
 				attemptTurnIn(activeTarget)
 				task.wait(0.12)
 				continue
@@ -11510,7 +11956,7 @@ return function(Window, player, QuestTab, config)
 			FarmState.CompletedQuest = false
 			getgenv().CompletedQuest = false
 			if questData.Enemy then
-				setQuestStatus("Farming selected target", tostring(activeTarget) .. "  •  target: " .. tostring(questData.Enemy) .. (maximum > 0 and ("  •  " .. tostring(progress) .. "/" .. tostring(maximum)) or ""))
+				updateProgressLabel()
 				local enemy = findAliveQuestEnemy(questData.Enemy)
 				if enemy then
 					local ok, err = pcall(FarmUtil.Kill, enemy)
@@ -12097,9 +12543,9 @@ local function setBoostedSpawnTarget(itemName, itemPart)
         return
     end
 
-    -- React to the instance-added signal directly; this is intentionally not
-    -- throttled by the notification system or the periodic item scanner.
-    Farm.PendingBoostedTarget = itemPart
+    -- Queue spawn events directly. Duplicate events for the same part are
+    -- deduplicated, while separate items are kept so simultaneous spawns aren't lost.
+    Farm.queueBoostedTarget(itemPart)
 end
 
 function Farm.notifySpawnedItem(itemName, itemPart)
