@@ -9955,8 +9955,8 @@ _G.__MethionSettingsSections.Movement:Slider({
     Callback = function(v) Config.InstantDelay = v end,
 })
 _G.__MethionSettingsSections.Movement:Paragraph({
-    Title = "Instant Visual Character",
-    Desc = "The local decoy follows your movement input and mirrors currently playing character animations. Its parts cannot collide with the real character or items.",
+    Title = "Vilo",
+    Desc = "Hello?.",
 })
 _G.__MethionSettingsSections.Movement:Toggle({
     Title = "Boosted",
