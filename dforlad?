@@ -10079,7 +10079,7 @@ do
     })
 
     aboutSection:Paragraph({Title = "Project", Desc = "Methion"})
-    aboutSection:Paragraph({Title = "Version", Desc = "1.2"})
+    aboutSection:Paragraph({Title = "Version", Desc = "2"})
     aboutSection:Paragraph({Title = "Owner / Author", Desc = "Diablo"})
     aboutSection:Paragraph({Title = "Interface and Lua Work", Desc = "Diablo"})
     aboutSection:Paragraph({Title = "Credit", Desc = "redikXrbs."})
