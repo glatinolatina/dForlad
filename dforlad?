@@ -6,7 +6,7 @@ local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
 local PhysicsService = game:GetService("PhysicsService")
 
-local AIRFLOW_LIBRARY_URL = "https://raw.githubusercontent.com/Methions/modf/refs/heads/main/modf"
+local AIRFLOW_LIBRARY_URL = "https://raw.githubusercontent.com/Methions/modf/refs/heads/main/par"
 local libraryOk, AirflowLibrary = pcall(function()
     local source = game:HttpGet(AIRFLOW_LIBRARY_URL)
     assert(type(source) == "string" and #source > 0, "The Airflow library returned an empty response")
@@ -4462,9 +4462,9 @@ local function setupAutoPrestige(parentTab)
         if untilTime <= tick() then
             untilTime = tick() + 10
             AP.CombatDialoguePauseUntil = untilTime
-            setStatus("Combat warning detected; pausing dialogue for 10 seconds before retrying")
+            setStatus("Fight detected. Waiting 10 seconds before trying again.")
         else
-            setStatus("Combat warning detected; waiting for the dialogue retry timer")
+            setStatus("Fight detected. Waiting before trying again.")
         end
 
         while AP.Enabled and tick() < untilTime do
@@ -4793,7 +4793,7 @@ local function setupAutoPrestige(parentTab)
             if AP.Mode == "Vamp Farm" and AP.VampFarmSweepStarted and cursor > #STORY_KEYS then
                 target = "Vamp Farm"
             else
-                target = STORYLINE_LABELS[math.min(cursor, #STORY_KEYS)] or "Use saved checkpoint"
+                target = STORYLINE_LABELS[math.min(cursor, #STORY_KEYS)] or "Continue where I left off"
             end
         end
         if target then
@@ -4824,7 +4824,7 @@ local function setupAutoPrestige(parentTab)
         AP.StorylineRecoveryUsed = false
         syncStorylineDropdown()
         updateStorylineProgress()
-        setStatus("Vamp Farm active; all 18 mapped storyline steps checked" .. (reason and (" · " .. tostring(reason)) or ""))
+        setStatus("Vamp Farm is active.")
         return true
     end
 
@@ -4911,7 +4911,7 @@ local function setupAutoPrestige(parentTab)
                 and AP.VampFarmStep11Completed == true then
                 saveStorylineCheckpoint(12, 11, nil)
                 AP.VampFarmPost11SweepActive = true
-                setStatus("Storyline #7 already completed; continuing at step 12 / Storyline #8")
+                setStatus("Storyline step 7 is done. Continuing from step 8.")
                 continue
             end
 
@@ -4938,7 +4938,7 @@ local function setupAutoPrestige(parentTab)
             if AP.CombatDialogueDeferred then
                 AP.CombatDialogueDeferred = false
                 saveStorylineCheckpoint(i, nil, nil)
-                setStatus("Combat blocked this NPC dialogue; retrying the same storyline step after the 10-second pause")
+                setStatus("Can’t talk during combat. Trying again in 10 seconds.")
                 return false, false
             end
 
@@ -4955,7 +4955,7 @@ local function setupAutoPrestige(parentTab)
                         AP.StorylineForceRecoverySweep = false
                         if syncStorylineDropdown then syncStorylineDropdown() end
                         if updateStorylineProgress then updateStorylineProgress() end
-                        setStatus("Died during Storyline " .. STORY_KEYS[i] .. "; keeping this step for retry after respawn")
+                        setStatus("Died during Storyline " .. STORY_KEYS[i] .. ". Will try again after respawning.")
                         return false, false
                     end
                 end
@@ -4967,7 +4967,7 @@ local function setupAutoPrestige(parentTab)
                 AP.StorylineRecoveryUsed = false
                 if syncStorylineDropdown then syncStorylineDropdown() end
                 if updateStorylineProgress then updateStorylineProgress() end
-                setStatus("Died/reset during Storyline " .. STORY_KEYS[i] .. "; retrying the same step")
+                setStatus("You respawned during Storyline " .. STORY_KEYS[i] .. ". Trying the same step again.")
                 return false, false
             end
 
@@ -5002,7 +5002,7 @@ local function setupAutoPrestige(parentTab)
                 end
                 saveStorylineCheckpoint(i + 1, i, questName)
                 AP.StorylineForceRecoverySweep = false
-                setStatus("Checkpoint saved after Storyline " .. STORY_KEYS[i] .. ": " .. questName)
+                setStatus("Finished Storyline " .. STORY_KEYS[i] .. ": " .. questName)
                 return true, true
             end
 
@@ -5019,7 +5019,7 @@ local function setupAutoPrestige(parentTab)
                 AP.StorylineStep11OptionIndex = 1
                 AP.StorylineStep11FailureCount = 0
                 saveStorylineCheckpoint(i + 1, i, nil)
-                setStatus("Storyline " .. STORY_KEYS[i] .. " unavailable; continuing to the next mapped step")
+                setStatus("Could not do Storyline " .. STORY_KEYS[i] .. ". Moving on.")
                 continue
             end
 
@@ -5027,7 +5027,7 @@ local function setupAutoPrestige(parentTab)
             -- failed during a normal storyline run. Keep the cursor on that step.
             if not interacted and requireThisStep then
                 saveStorylineCheckpoint(i, nil, nil)
-                setStatus("Vamp Farm sweep paused at step " .. tostring(i) .. "; waiting for this storyline dialogue instead of skipping to farming")
+                setStatus("Vamp Farm paused at step " .. tostring(i) .. ". Waiting for this dialogue.")
                 return false, false
             end
 
@@ -5052,13 +5052,13 @@ local function setupAutoPrestige(parentTab)
                             AP.VampFarmPost11SweepActive = true
                         end
                         saveStorylineCheckpoint(i + 1, i, nil)
-                        setStatus("Storyline #7 did not advance after retries; resetting its dialogue and continuing at Storyline #8")
+                        setStatus("Storyline step 7 got stuck. Moving to step 8.")
                         continue
                     end
                 end
 
                 saveStorylineCheckpoint(i, nil, nil)
-                setStatus("Storyline " .. STORY_KEYS[i] .. " choices incomplete; retrying this step")
+                setStatus("Storyline " .. STORY_KEYS[i] .. " was incomplete. Trying again.")
                 return false, false
             end
 
@@ -5067,7 +5067,7 @@ local function setupAutoPrestige(parentTab)
             -- the next pass instead of opening/typing into the wrong dialogue.
             if not interacted and Gui.currentDialogue() then
                 saveStorylineCheckpoint(i, nil, nil)
-                setStatus("Finishing the current Storyline " .. STORY_KEYS[i] .. " dialogue before continuing")
+                setStatus("Finishing Storyline " .. STORY_KEYS[i] .. " before continuing.")
                 return false, false
             end
 
@@ -5081,13 +5081,13 @@ local function setupAutoPrestige(parentTab)
                 -- retrying may belong to an already-cleared stage. Keep scanning
                 -- instead of getting stuck at an unknown old checkpoint.
                 saveStorylineCheckpoint(i + 1, i, nil)
-                setStatus("Recovery sweep: checking past Storyline " .. STORY_KEYS[i])
+                setStatus("Checking Storyline " .. STORY_KEYS[i])
             else
                 -- This mapped dialogue is unavailable/already passed at the saved
                 -- checkpoint. Skip it and continue FORWARD instead of retrying it
                 -- forever and eventually resetting the whole storyline to #1.
                 saveStorylineCheckpoint(i + 1, i, nil)
-                setStatus("Skipping unavailable Storyline " .. STORY_KEYS[i] .. "; continuing forward")
+                setStatus("Skipping unavailable Storyline " .. STORY_KEYS[i] .. ". Moving on.")
             end
         end
         return false, true
@@ -5139,7 +5139,7 @@ local function setupAutoPrestige(parentTab)
         for _, entry in ipairs(STORY_NPCS) do
             if finalQuests[entry.quest] then
                 AP.StorylineCheckpointKnown = true
-                setStatus("All 18 mapped steps checked; finishing storyline quest: " .. entry.quest)
+                setStatus("Storyline nearly done. Finishing quest: " .. entry.quest)
                 return true
             end
         end
@@ -5162,7 +5162,7 @@ local function setupAutoPrestige(parentTab)
         AP.StorylineRecoveryUsed = false
         if syncStorylineDropdown then syncStorylineDropdown() end
         if updateStorylineProgress then updateStorylineProgress() end
-        setStatus("Storyline 18/18 complete; automatically switching to Vamp Farm")
+        setStatus("Storyline complete. Starting Vamp Farm.")
 
         local vampireQuestNow = finalQuests[VAMPIRE_QUEST]
         if vampireQuestNow then
@@ -5225,7 +5225,7 @@ local function setupAutoPrestige(parentTab)
             return autoStandMorph() ~= nil
         end
         if not toggleStandUntilReady() then
-            setStatus("Stand unavailable; resetting character")
+            setStatus("Stand not ready. Resetting character.")
             pcall(function() autoHumanoid().Health = 0 end)
             waitAutoRespawn(22)
             if xpConnection then xpConnection:Disconnect() end
@@ -5420,11 +5420,11 @@ local function setupAutoPrestige(parentTab)
         local dialogueFolder = ReplicatedStorage:FindFirstChild("Dialogue")
         local prestigeDialogue = dialogueFolder and dialogueFolder:FindFirstChild("Prestige Master")
         if not prestigeDialogue then
-            setStatus("Prestige Master dialogue not found")
+            setStatus("Could not find Prestige Master.")
             return false
         end
 
-        setStatus("Opening Prestige Master dialogue")
+        setStatus("Talking to Prestige Master.")
         local confirmed = false
         for attempt = 1, 3 do
             if not AP.Enabled then return false end
@@ -5439,7 +5439,7 @@ local function setupAutoPrestige(parentTab)
 
             local remote = autoRemoteEvent()
             if not remote then
-                setStatus("Waiting for character RemoteEvent to prestige")
+                setStatus("Waiting to prestige.")
                 task.wait(0.35)
                 continue
             end
@@ -5448,12 +5448,12 @@ local function setupAutoPrestige(parentTab)
                 remote:FireServer("PromptTriggered", prestigeDialogue)
             end)
             if not fired then
-                setStatus("Could not trigger Prestige Master (attempt " .. attempt .. "/3)")
+                setStatus("Could not talk to Prestige Master (attempt " .. attempt .. "/3)")
                 task.wait(0.35)
                 continue
             end
 
-            setStatus("Prestige Master dialogue · attempt " .. attempt .. "/3")
+            setStatus("Talking to Prestige Master (attempt " .. attempt .. "/3")
             local gui = Gui.waitDialogue(3)
             if gui and AP.Enabled and (tonumber(AutoPrestige.Value) or 0) <= previous then
                 advanceAutoDialogue("Option1", 5.0)
@@ -5470,7 +5470,7 @@ local function setupAutoPrestige(parentTab)
 
             if confirmed then break end
             if attempt < 3 and AP.Enabled then
-                setStatus("Prestige not confirmed; retrying Prestige Master")
+                setStatus("Prestige did not work. Trying again.")
                 task.wait(0.4)
             end
         end
@@ -5479,14 +5479,14 @@ local function setupAutoPrestige(parentTab)
             confirmed = true
         end
         if not confirmed then
-            setStatus("Prestige failed: Prestige Master did not confirm")
+            setStatus("Prestige failed. Try again.")
             return false
         end
 
         notify("Auto Prestige", "Prestiged to " .. tostring(AutoPrestige.Value) .. ".", 5)
         pcall(function() autoHumanoid().Health = 0 end)
         if not waitAutoRespawn(22) then
-            setStatus("Respawn timeout after prestige")
+            setStatus("Could not respawn after prestige.")
             return false
         end
         task.wait(1)
@@ -5531,7 +5531,7 @@ local function setupAutoPrestige(parentTab)
             end
             task.wait(0.4)
         end
-        notify("Auto Prestige", "Found Requiem Arrow. Attempting to use it.", 5)
+        notify("Auto Prestige", "Found a Requiem Arrow. Trying to use it.", 5)
         local hum = autoHumanoid()
         if hum then pcall(function() hum:EquipTool(arrow) end) end
         local equipped = autoCharacter():FindFirstChild("Requiem Arrow")
@@ -5582,7 +5582,7 @@ local function setupAutoPrestige(parentTab)
                     end
 
                     if deathDetected then
-                        setStatus("Died during " .. entry.quest .. "; waiting to resume the same storyline step")
+                        setStatus("Died during " .. entry.quest .. ". Waiting to continue the same step.")
                         local characterNow = AutoPlayer.Character
                         local humanoidNow = characterNow and characterNow:FindFirstChildWhichIsA("Humanoid")
                         if not characterNow or not humanoidNow or humanoidNow.Health <= 0 then
@@ -5604,7 +5604,7 @@ local function setupAutoPrestige(parentTab)
                         if recoveredQuests[entry.quest] then
                             deathDetected = false
                             monitorCharacterDeath(respawnedCharacter)
-                            setStatus("Respawned; continuing current quest: " .. entry.quest)
+                            setStatus("Back in the game. Continuing the quest: " .. entry.quest)
                             continue
                         end
 
@@ -5622,9 +5622,9 @@ local function setupAutoPrestige(parentTab)
                             AP.StorylineLastQuest = nil
                             if syncStorylineDropdown then syncStorylineDropdown() end
                             if updateStorylineProgress then updateStorylineProgress() end
-                            setStatus("Respawned before finishing " .. entry.quest .. "; retrying Storyline " .. STORY_KEYS[recoveryIndex])
+                            setStatus("You respawned before finishing " .. entry.quest .. "; retrying Storyline " .. STORY_KEYS[recoveryIndex])
                         else
-                            setStatus("Respawned before finishing " .. entry.quest .. "; holding storyline progress for recovery")
+                            setStatus("You respawned before finishing " .. entry.quest .. ". Keeping your place.")
                         end
                         retrySameStepAfterDeath = true
                         break
@@ -5670,7 +5670,7 @@ local function setupAutoPrestige(parentTab)
         -- combat quest to kill. Talk-to-NPC and other non-combat quest entries
         -- must not block the dialogue chain from reaching the next combat quest.
         if AP.Enabled and not AP.StorylineSweepCancelled and not currentAutoProgressQuest() then
-            setStatus("Advancing storyline dialogues")
+            setStatus("Continuing the storyline.")
             fireStorylineSweep()
             task.wait(0.25)
             quests = autoQuests()
@@ -5689,14 +5689,14 @@ local function setupAutoPrestige(parentTab)
             -- the vampire handoff happens. It is authorized only after all 18
             -- mapped entries have been checked and every story combat quest is clear.
             if not vampSweepFinished then
-                setStatus("Sweeping all 18 storyline steps before Vamp Farm")
+                setStatus("Finishing the storyline before Vamp Farm.")
                 return false
             end
 
             local current = autoQuests()
             for _, entry in ipairs(STORY_NPCS) do
                 if current[entry.quest] then
-                    setStatus("Finishing storyline quest before Vamp Farm: " .. entry.quest)
+                    setStatus("Finish this quest before Vamp Farm: " .. entry.quest)
                     return false
                 end
             end
@@ -5715,11 +5715,11 @@ local function setupAutoPrestige(parentTab)
                         if current[entry.quest] then storyQuestActive = true break end
                     end
                     if storyQuestActive then
-                        setStatus("Finishing storyline quest before Vamp Farm")
+                        setStatus("Finishing the quest before Vamp Farm.")
                         return false
                     end
 
-                    setStatus("Storyline 18/18 complete · requesting Vampire quest (attempt " .. attempt .. "/12)")
+                    setStatus("Storyline done. Trying to start the Vampire quest (attempt " .. attempt .. "/12)")
                     local opened = openAutoDialogue("William Zeppeli", "Dialogue4", true)
                     if opened then
                         advanceAutoDialogue("Option1", 5.0)
@@ -5751,7 +5751,7 @@ local function setupAutoPrestige(parentTab)
             -- Keep the cursor at step 19 and retry the vampire dialogue on the
             -- next pass. Never restart the 18-step sweep just because the quest
             -- UI took longer than one dialogue attempt to update.
-            setStatus("Storyline complete; waiting for the vampire quest to appear")
+            setStatus("Storyline done. Waiting for the Vampire quest.")
             return false
         end
 
@@ -5765,7 +5765,7 @@ local function setupAutoPrestige(parentTab)
                 if fresh[entry.quest] then storyActive = true break end
             end
             if not storyActive and not fresh[VAMPIRE_QUEST] then
-                setStatus("Checking vampire quest")
+                setStatus("Checking for the Vampire quest.")
                 fireDialogue("William Zeppeli", "Dialogue4", "Option1")
                 task.wait(0.25)
             end
@@ -5787,10 +5787,10 @@ local function setupAutoPrestige(parentTab)
             return
         end
         if not waitAutoRuntime(8) then
-            notify("Auto Prestige", "Character/remotes unavailable. Try again in a moment.", 7)
+            notify("Auto Prestige", "Character is not ready. Try again in a moment.", 7)
             AP.Enabled = false
             AP.Busy = false
-            setStatus("Runtime unavailable")
+            setStatus("Character not ready.")
             return
         end
         task.spawn(learnAllAutoSkills)
@@ -5810,14 +5810,14 @@ local function setupAutoPrestige(parentTab)
             end
             if tick() - lastNpcKillAt >= 240 and not warnedNoKill then
                 warnedNoKill = true
-                notify("Auto Prestige", "Warning: no NPC kill has been detected for 240 seconds.", 8)
-                setStatus("Warning: no NPC kill for 240s")
+                notify("Auto Prestige", "No NPCs defeated for a while. Check your farm.", 8)
+                setStatus("No NPCs defeated for a while.")
             end
             if not autoRuntimeReady() then
                 runtimeMisses += 1
-                setStatus("Recovering runtime (" .. tostring(runtimeMisses) .. "/3)")
+                setStatus("Trying to recover (" .. tostring(runtimeMisses) .. "/3)")
                 if not waitAutoRuntime(6) and runtimeMisses >= 3 then
-                    notify("Auto Prestige", "Stopped: runtime unavailable after retries.", 7)
+                    notify("Auto Prestige", "Stopped because the character was not ready.", 7)
                     AP.Enabled = false
                     break
                 end
@@ -5826,7 +5826,7 @@ local function setupAutoPrestige(parentTab)
             end
             runtimeMisses = 0
             if isBlacklistedStand(AutoStand.Value) then
-                notify("Auto Prestige", "Stopped. Blacklisted stand detected: " .. tostring(AutoStand.Value) .. ".", 7)
+                notify("Auto Prestige", "Stopped. This stand is blocked: " .. tostring(AutoStand.Value) .. ".", 7)
                 AP.Enabled = false
                 break
             end
@@ -5836,7 +5836,7 @@ local function setupAutoPrestige(parentTab)
                 local progressed = progressStory()
                 if not progressed and AP.Enabled then
                     if AP.StorylineSweepCancelled or AP.VampFarmActive then
-                        setStatus("Vamp Farm active; waiting for the next vampire quest")
+                        setStatus("Vamp Farm is running. Waiting for the next quest.")
                         task.wait(1)
                     elseif AP.Mode == "Vamp Farm" and AP.VampFarmModeRequested == true then
                         local atVampireHandoff = AP.VampFarmFullSweepCompleted == true
@@ -5844,15 +5844,15 @@ local function setupAutoPrestige(parentTab)
                         if atVampireHandoff then
                             -- Step 19 is the vampire handoff phase, not the end of the run.
                             -- Leave the cursor here while the next pass re-requests the quest.
-                            setStatus("All 18 storyline steps complete; retrying vampire quest handoff")
+                            setStatus("Storyline done. Trying to start Vamp Farm again.")
                         else
                             -- progressStory already made this pass's sweep attempt; do not
                             -- invoke a second sweep from the fallback branch.
-                            setStatus("Continuing Vamp Farm storyline sweep")
+                            setStatus("Continuing Vamp Farm.")
                         end
                         task.wait(1)
                     else
-                        setStatus("Claiming storyline")
+                        setStatus("Starting the storyline.")
                         local attempts = 0
                         while AP.Enabled and attempts < 15 and next(autoQuests()) == nil do
                             local before = AP.StorylineCursor
@@ -5865,7 +5865,7 @@ local function setupAutoPrestige(parentTab)
                         if next(autoQuests()) == nil and AP.Enabled then
                             AP.StorylineForceRecoverySweep = false
                             AP.StorylineCheckpointKnown = true
-                            setStatus("No new quest detected; saved storyline checkpoint kept at " .. tostring(AP.StorylineCursor))
+                            setStatus("No new quest yet. Staying on step " .. tostring(AP.StorylineCursor))
                             task.wait(1)
                         end
                     end
@@ -5873,10 +5873,10 @@ local function setupAutoPrestige(parentTab)
             end)
             if not ok then
                 errorCount += 1
-                setStatus("Error recovery (" .. tostring(errorCount) .. "/3)")
+                setStatus("Trying to recover (" .. tostring(errorCount) .. "/3)")
                 warn("[Auto Prestige] " .. tostring(err))
                 if errorCount >= 3 then
-                    notify("Auto Prestige", "Stopped after repeated runtime errors.", 7)
+                    notify("Auto Prestige", "Stopped after repeated errors.", 7)
                     AP.Enabled = false
                     break
                 end
@@ -5892,19 +5892,19 @@ local function setupAutoPrestige(parentTab)
     end
 
     local AutoPrestigeMain = parentTab:Section({Title = "Auto Storyline Controls", Side = "left"})
-    AutoPrestigeMain:Paragraph({Title = "Auto Storyline", Desc = "Progress through storyline dialogues and assigned quests, then automatically switch to Vamp Farm after all 18 mapped steps are complete."})
+    AutoPrestigeMain:Paragraph({Title = "Auto Storyline", Desc = "Automatically finish the storyline, then start Vamp Farm."})
     STATUS_LABEL = AutoPrestigeMain:Paragraph({Title = "Status", Desc = AP.Status})
     PROGRESS_BAR = AutoPrestigeMain:Progress({
         Title = "Storyline Progress",
-        Desc = "Progress through the mapped storyline steps.",
+        Desc = "Shows your storyline progress.",
         Default = 0,
         Format = function(value)
             return tostring(math.floor(value * 100 + 0.5)) .. "%"
         end,
     })
-    PROGRESS_DETAIL_LABEL = AutoPrestigeMain:Paragraph({Title = "Progress Details", Desc = "Next: Storyline #1 · step 1/18"})
+    PROGRESS_DETAIL_LABEL = AutoPrestigeMain:Paragraph({Title = "Next Step", Desc = "Next: Step 1 of 18"})
 
-    local storylineStartValues = {"Use saved checkpoint"}
+    local storylineStartValues = {"Continue where I left off"}
     local storylineStartIndex = {}
     for i, label in ipairs(STORYLINE_LABELS) do
         table.insert(storylineStartValues, label)
@@ -5913,9 +5913,9 @@ local function setupAutoPrestige(parentTab)
     table.insert(storylineStartValues, "Vamp Farm")
     STORYLINE_DROPDOWN = AutoPrestigeMain:Dropdown({
         Title = "Storyline / Farm Mode",
-        Desc = "Choose a resume step, or select Vamp Farm to sweep every mapped dialogue from Storyline #1 through the final step before starting vampire farming. The selection follows the next step automatically.",
+        Desc = "Choose where to start, or pick Vamp Farm to finish the storyline first.",
         Values = storylineStartValues,
-        Value = "Use saved checkpoint",
+        Value = "Continue where I left off",
         Multi = false,
         Callback = function(selected)
             if AP.SyncingDropdown then return end
@@ -5940,10 +5940,10 @@ local function setupAutoPrestige(parentTab)
                 AP.StorylineRecoveryUsed = false
                 AP.StorylineLastDialogueIndex = nil
                 AP.StorylineLastQuest = nil
-                setStatus("Vamp Farm selected; sweep will start at Storyline #1")
+                setStatus("Vamp Farm selected. Starting from the beginning.")
                 return
             end
-            if not selected or selected == "Use saved checkpoint" then
+            if not selected or selected == "Continue where I left off" then
                 AP.Mode = "Storyline"
                 AP.VampFarmModeRequested = false
                 AP.VampFarmActive = false
@@ -5951,7 +5951,7 @@ local function setupAutoPrestige(parentTab)
                 AP.StorylineSweepCancelled = false
                 AP.VampFarmSweepStarted = false
                 AP.StorylineManualStartIndex = nil
-                setStatus("Using saved storyline checkpoint " .. tostring(AP.StorylineCursor or 1))
+                setStatus("Continuing from step " .. tostring(AP.StorylineCursor or 1))
                 return
             end
             local index = storylineStartIndex[selected]
@@ -5972,18 +5972,18 @@ local function setupAutoPrestige(parentTab)
                 AP.StorylineCheckpointKnown = true
                 AP.StorylineForceRecoverySweep = false
                 AP.StorylineRecoveryUsed = false
-                setStatus("Storyline resume point set to " .. selected)
+                setStatus("Starting from " .. selected)
             end
         end,
     })
     if updateStorylineProgress then updateStorylineProgress() end
 
     if not bypassSupported then
-        AutoPrestigeMain:Paragraph({Title = "Unavailable", Desc = "Your executor did not pass the required bypass setup, so Auto Storyline is disabled."})
+        AutoPrestigeMain:Paragraph({Title = "Unavailable", Desc = "Auto Storyline is not available on this executor."})
     else
         AutoPrestigeMain:Toggle({
             Title = "Auto Storyline",
-            Desc = "Sweep from Storyline #1 through all 18 mapped steps, then automatically select Vamp Farm and continue until the vampire quest is active.",
+            Desc = "Finish the storyline, then start Vamp Farm.",
             Value = false,
             Callback = function(state)
                 if AP.Busy and state then return end
@@ -5993,7 +5993,7 @@ local function setupAutoPrestige(parentTab)
                         pcall(function() sharedEnv = getgenv() or _G end)
                     end
                     if _G.QuestFarmEnabled or _G.NPCFarmEnabled or sharedEnv.QuestFarmEnabled or sharedEnv.NPCFarmEnabled then
-                        notify("Auto Storyline", "Quest Farm or NPC Farm is already running. Disable it first.", 5)
+                        notify("Auto Storyline", "Turn off Quest Farm or NPC Farm first.", 5)
                         return
                     end
                     if isBlacklistedStand(AutoStand.Value) then
@@ -6020,7 +6020,7 @@ local function setupAutoPrestige(parentTab)
                         AP.StorylineCheckpointKnown = false
                         AP.StorylineSweepCancelled = false
                         AP.VampFarmSweepStarted = true
-                        setStatus("Vamp Farm discovery sweep: checking Storyline #1 onward")
+                        setStatus("Checking the storyline from the beginning.")
                     else
                         -- Resume a known checkpoint instead of resetting to Dialogue 1.
                         local savedCursor = tonumber(AP.StorylineCursor)
@@ -6032,7 +6032,7 @@ local function setupAutoPrestige(parentTab)
                         if checkpointValid then
                             AP.StorylineCursor = math.clamp(math.floor(savedCursor), 1, #STORY_KEYS + 1)
                             if not AP.StorylineSweepCancelled then AP.StorylineForceRecoverySweep = false end
-                            setStatus("Resuming storyline at saved dialogue " .. tostring(AP.StorylineCursor))
+                            setStatus("Continuing from step " .. tostring(AP.StorylineCursor))
                         else
                             AP.StorylineCursor = 1
                             AP.StorylineRecoveryUsed = false
@@ -6040,7 +6040,7 @@ local function setupAutoPrestige(parentTab)
                             AP.StorylineLastQuest = nil
                             AP.StorylineForceRecoverySweep = true
                             AP.StorylineCheckpointKnown = false
-                            setStatus("Starting storyline discovery from #1")
+                            setStatus("Starting the storyline from the beginning.")
                         end
                     end
                     AP.StorylineCursorVersion = 2
@@ -6057,13 +6057,13 @@ local function setupAutoPrestige(parentTab)
     end
 
     local AutoPrestigeQuick = parentTab:Section({Title = "Storyline Quick Actions", Side = "right"})
-    AutoPrestigeQuick:Paragraph({Title = "Storyline", Desc = "Use these tools manually when Auto Storyline is stopped."})
+    AutoPrestigeQuick:Paragraph({Title = "Storyline", Desc = "Use these buttons when Auto Storyline is off."})
     AutoPrestigeQuick:Button({
-        Title = "Fire All Storyline Dialogues",
-        Desc = "Advance from the selected/saved step through talk dialogues until a combat quest is assigned. Reusable after each quest.",
+        Title = "Continue Storyline",
+        Desc = "Keep going through dialogue until you get a fighting quest.",
         Callback = function()
             if AP.Enabled or AP.Busy then
-                notify("Storyline", "Auto Storyline is already running. Stop it first.", 5)
+                notify("Storyline", "Turn off Auto Storyline first.", 5)
                 return
             end
             if AP.StorylineCursor == nil then
@@ -6071,8 +6071,8 @@ local function setupAutoPrestige(parentTab)
             elseif AP.StorylineCursor > #STORY_KEYS then
                 local restartIndex = tonumber(AP.StorylineManualStartIndex)
                 if not restartIndex then
-                    setStatus("Mapped dialogues are exhausted. Choose your current step in Storyline Resume Point first.")
-                    notify("Storyline", "Choose a resume point from the dropdown before starting another pass.", 6)
+                    setStatus("All dialogue steps are done. Choose where to continue.")
+                    notify("Storyline", "Choose where to start first.", 6)
                     return
                 end
                 AP.StorylineCursor = math.clamp(math.floor(restartIndex), 1, #STORY_KEYS)
@@ -6089,24 +6089,24 @@ local function setupAutoPrestige(parentTab)
                 end)
                 AP.Enabled = false
                 if not ok then
-                    setStatus("Storyline dialogue sweep failed: " .. tostring(err))
+                    setStatus("Dialogue failed: " .. tostring(err))
                     warn("[Storyline] " .. tostring(err))
-                    notify("Storyline", "Dialogue sweep failed. Check the console warning.", 5)
+                    notify("Storyline", "Dialogue did not finish. Try again.", 5)
                     return
                 end
                 local activeQuest = currentAutoProgressQuest()
                 if activeQuest then
                     setStatus("Stopped at combat quest: " .. activeQuest)
-                    notify("Storyline", "Combat quest detected: " .. activeQuest .. ". Finish it, then press Fire All again.", 6)
+                    notify("Storyline", "Fighting quest found: " .. activeQuest .. ". Finish it, then press Continue Storyline again.", 6)
                 elseif AP.StorylineCursor > #STORY_KEYS then
-                    setStatus("Mapped dialogues finished. Choose a resume point to continue from another step.")
-                    notify("Storyline", "Mapped dialogues processed. Choose a resume point to continue without replaying from #1.", 6)
+                    setStatus("Dialogue finished. Choose another starting point to continue.")
+                    notify("Storyline", "Done. Choose where to continue next time.", 6)
                 elseif sweepResult == false then
-                    setStatus("Sweep paused at step " .. tostring(AP.StorylineCursor) .. ". The cursor was kept so this step can be retried.")
-                    notify("Storyline", "This dialogue step did not finish. The saved resume point was preserved.", 6)
+                    setStatus("Paused at step " .. tostring(AP.StorylineCursor) .. ". You can retry this step.")
+                    notify("Storyline", "This dialogue did not finish. Your starting point was saved.", 6)
                 else
-                    setStatus("Dialogue sweep finished at step " .. tostring(AP.StorylineCursor))
-                    notify("Storyline", "Dialogue sweep finished. You can press Fire All again.", 5)
+                    setStatus("Finished at step " .. tostring(AP.StorylineCursor))
+                    notify("Storyline", "Done. Press Continue Storyline when you are ready.", 5)
                 end
             end)
         end,
@@ -6122,12 +6122,12 @@ local AutoPrestigeTab = Window:Tab({Title = "Auto Prestige", Icon = "book-open"}
 _G.__PhantomQuestFarmTab = Window:Tab({
     Title = "Quest Farm",
     Icon = "swords",
-    Desc = "Quest automation and selected NPC farming.",
+    Desc = "Auto-farm quests and NPCs.",
 })
 local HalloweenTab = Window:Tab({
     Title = "Halloween Event",
     Icon = "ghost",
-    Desc = "Collect Halloween candy and automatically turn it in to Jack.",
+    Desc = "Collect candy and turn it in to Jack.",
 })
 
 local Halloween = {
@@ -6222,11 +6222,11 @@ end
 local HalloweenCollection = HalloweenTab:Section({Title = "Candy Collection", Side = "left"})
 HalloweenCollection:Paragraph({
     Title = "Auto Collect Candies",
-    Desc = "Collects only Green, Red, Blue, and Yellow Candy. Other items are ignored while this toggle is enabled.",
+    Desc = "Picks up Halloween candy only.",
 })
 HalloweenCollection:Toggle({
     Title = "Auto Collect Candies",
-    Desc = "Automatically collect only Halloween candy using the current farm movement mode.",
+    Desc = "Collect Halloween candy automatically.",
     Icon = "candy",
     Value = false,
     Callback = function(state)
@@ -6244,7 +6244,7 @@ HalloweenCollection:Toggle({
 local HalloweenTurnInSection = HalloweenTab:Section({Title = "Candy Turn-In", Side = "right"})
 HalloweenTurnInSection:Input({
     Title = "Candy Turn-In Threshold",
-    Desc = "Automatically turn in once your total candy reaches this amount. Range: 1–45.",
+    Desc = "Turn in candy when you have this many. Max: 45.",
     Placeholder = "20",
     Value = "20",
     Callback = function(value)
@@ -6256,7 +6256,7 @@ HalloweenTurnInSection:Input({
 })
 HalloweenTurnInSection:Toggle({
     Title = "Auto Turn In Candies",
-    Desc = "Opens Jack's Halloween dialogue and selects the second option when your candy reaches the threshold.",
+    Desc = "Turn in your candy automatically when you reach the amount above.",
     Icon = "message-circle",
     Value = true,
     Callback = function(state)
@@ -6266,7 +6266,7 @@ HalloweenTurnInSection:Toggle({
 })
 HalloweenTurnInSection:Button({
     Title = "Turn In Candies Now",
-    Desc = "Open Jack's dialogue and select the second option once.",
+    Desc = "Turn in your candy now.",
     Icon = "gift",
     Callback = function()
         task.spawn(function()
@@ -6277,7 +6277,7 @@ HalloweenTurnInSection:Button({
 })
 Halloween.StatusLabel = HalloweenTurnInSection:Paragraph({
     Title = "Candy Inventory",
-    Desc = "Counting candy in your character and backpack...",
+    Desc = "Checking your candy...",
 })
 
 task.spawn(function()
@@ -6322,7 +6322,7 @@ end)
 local FarmAutomation = FarmTab:Section({Title = "Automation", Side = "left"})
 FarmAutomation:Toggle({
     Title = "Auto Farm",
-    Desc = "Enable or disable auto farm",
+    Desc = "Farm items automatically.",
     Icon = "zap",
     Value = false,
     Callback = function(state)
@@ -6354,7 +6354,7 @@ setupAutoPrestige(AutoPrestigeTab)
 
 FarmAutomation:Toggle({
     Title = "Auto Buy Lucky Arrow",
-    Desc = "Automatically buys lucky arrows",
+    Desc = "Buy Lucky Arrows automatically.",
     Icon = "shopping-cart",
     Value = false,
     Callback = function(state)
@@ -6366,7 +6366,7 @@ FarmAutomation:Toggle({
 local FarmSettings = FarmTab:Section({Title = "Farm Filters", Side = "right"})
 FarmSettings:Dropdown({
     Title = "Teleport mode",
-    Desc = bypassSupported and "Choose a teleportation mode." or "Instant is unavailable because this executor did not pass the bypass check. Tween is forced.",
+    Desc = bypassSupported and "Choose how to move between items." or "Instant isn't available here. Tween is enabled.",
     Icon = "zap",
     Values = bypassSupported and {"Instant", "Tween"} or {"Tween"},
     Value = bypassSupported and "Instant" or "Tween",
@@ -6374,7 +6374,7 @@ FarmSettings:Dropdown({
     Callback = function(selected)
         if selected == "Instant" and not bypassSupported then
             Config.FarmTeleportMode = "tween"
-            AirflowCompat:Notify({Title = "Instant unavailable", Content = "This executor did not pass the bypass check. Tween remains enabled.", Type = "Warning", Duration = 4})
+            AirflowCompat:Notify({Title = "Instant unavailable", Content = "Instant mode isn't supported here. Tween stays on.", Type = "Warning", Duration = 4})
             return
         end
         Config.FarmTeleportMode = (selected == "Instant" and bypassSupported) and "instant" or "tween"
@@ -6382,7 +6382,7 @@ FarmSettings:Dropdown({
 })
 FarmSettings:Dropdown({
     Title = "Only items to farm",
-    Desc = "All items = no filter",
+    Desc = "Choose items to farm. Leave empty to farm everything.",
     Icon = "filter",
     Values = {
         "All items",
@@ -6403,7 +6403,7 @@ local FarmViewerSection = FarmTab:Section({Title = "Live Item Target", Side = "l
 local FarmItemViewerLastTarget = nil
 _G.__PhantomFarmItemViewer = FarmViewerSection:Viewer({
     Name = "Auto Farm Item Viewer",
-    Desc = "Automatically views the exact item Auto Farm has selected to collect.",
+    Desc = "Shows the item Auto Farm is going for.",
     Players = false,
     Height = 240,
     Float = false,
@@ -6446,27 +6446,27 @@ _G.__PhantomQuestFarmSetItemViewerTarget = function(target)
     pcall(function() viewer:Add(target, nil, true) end)
 end
 
-local ESPTab = Window:Tab({Title = "ESP", Icon = "eye", Desc = "Configure item and player overlays"})
+local ESPTab = Window:Tab({Title = "ESP", Icon = "eye", Desc = "Show items and players."})
 ESPTab:Header("ESP Control Center")
 ESPTab:Paragraph({
     Title = "World overlays",
-    Desc = "Control item markers and player labels independently. Appearance changes apply live to existing ESP objects.",
+    Desc = "Change item and player ESP separately.",
 })
 
 local ESPViewerSection = ESPTab:Section({Title = "Live Target Viewer", Side = "right"})
 ESPViewerSection:Paragraph({
     Title = "3D viewer",
-    Desc = "Inspect other players, NPCs, and supported items. Drag to rotate, use the wheel or zoom controls, and select targets from the viewer.",
+    Desc = "Drag to look around, then select a player, NPC, or item.",
 })
 UIRefs.viewerTargetStatus = ESPViewerSection:Paragraph({
     Title = "Selected target",
-    Desc = "No target selected yet.",
+    Desc = "Nothing selected.",
 })
 
 _G.__PhantomViewerAddedTargets = setmetatable({}, {__mode = "k"})
 _G.__PhantomPlayerViewer = ESPViewerSection:Viewer({
     Name = "Player Viewer",
-    Desc = "Live view of players, NPCs, and items.",
+    Desc = "Shows players, NPCs, and items.",
     Players = true,
     Height = 240,
     Float = false,
@@ -6570,7 +6570,7 @@ end)
 local ItemControl = ESPTab:Section({Title = "Item tracking", Side = "left"})
 ItemControl:Toggle({
     Title = "Item ESP",
-    Desc = "Show markers for supported items around the map.",
+    Desc = "Highlight items around the map.",
     Icon = "package-search",
     Value = true,
     Callback = function(state)
@@ -6582,7 +6582,7 @@ ItemControl:Toggle({
 UIRefs.farmItemsLabel = ItemControl:Paragraph({Title = "Items detected", Desc = tostring(ItemESP.count())})
 ItemControl:Toggle({
     Title = "Show item distance",
-    Desc = "Add the distance in meters beneath each item name.",
+    Desc = "Show the distance under each item name.",
     Icon = "ruler",
     Value = Config.Esp.ShowItemDistance,
     Callback = function(state)
@@ -6592,7 +6592,7 @@ ItemControl:Toggle({
 })
 ItemControl:Toggle({
     Title = "Notify on item spawn",
-    Desc = "Display a notification when a supported item appears.",
+    Desc = "Notify me when an item appears.",
     Icon = "bell-ring",
     Value = true,
     Callback = function(state)
@@ -6602,7 +6602,7 @@ ItemControl:Toggle({
 })
 ItemControl:Toggle({
     Title = "Use per-item colors",
-    Desc = "Use the built-in color for each item type instead of one custom color.",
+    Desc = "Use a different color for each item type.",
     Icon = "palette",
     Value = Config.Esp.ItemUseTypeColors,
     Callback = function(state)
@@ -6614,7 +6614,7 @@ ItemControl:Toggle({
 local ItemAppearance = ESPTab:Section({Title = "Item appearance", Side = "left"})
 ItemAppearance:ColorPicker({
     Title = "Item highlight color",
-    Desc = "Main fill color for item highlights.",
+    Desc = "Item fill color.",
     Default = Config.Esp.ItemHighlightColor,
     Flag = "PhantomESPItemHighlightColor",
     Callback = function(color)
@@ -6625,7 +6625,7 @@ ItemAppearance:ColorPicker({
 })
 ItemAppearance:ColorPicker({
     Title = "Item outline color",
-    Desc = "Color around the outside of item highlights.",
+    Desc = "Item outline color.",
     Default = Config.Esp.ItemOutlineColor,
     Flag = "PhantomESPItemOutlineColor",
     Callback = function(color)
@@ -6636,7 +6636,7 @@ ItemAppearance:ColorPicker({
 })
 ItemAppearance:ColorPicker({
     Title = "Item name color",
-    Desc = "Text color for item names and distance labels.",
+    Desc = "Item text color.",
     Default = Config.Esp.ItemNameColor,
     Flag = "PhantomESPItemNameColor",
     Callback = function(color)
@@ -6647,7 +6647,7 @@ ItemAppearance:ColorPicker({
 })
 ItemAppearance:Slider({
     Title = "Highlight fill opacity",
-    Desc = "Lower transparency makes the fill more solid.",
+    Desc = "Lower values make the fill more solid.",
     Value = {Min = 0, Max = 0.95, Default = Config.Esp.ItemFillTransparency},
     Step = 0.05,
     Callback = function(value)
@@ -6657,7 +6657,7 @@ ItemAppearance:Slider({
 })
 ItemAppearance:Slider({
     Title = "Outline transparency",
-    Desc = "Set 0 for a solid outline or raise it to soften the edge.",
+    Desc = "0 makes the outline solid.",
     Value = {Min = 0, Max = 0.95, Default = Config.Esp.ItemOutlineTransparency},
     Step = 0.05,
     Callback = function(value)
@@ -6667,7 +6667,7 @@ ItemAppearance:Slider({
 })
 ItemAppearance:Slider({
     Title = "Item label size",
-    Desc = "Text size for item names.",
+    Desc = "Item name size.",
     Value = {Min = 8, Max = 24, Default = Config.Esp.ItemTextSize},
     Step = 1,
     Callback = function(value)
@@ -6679,7 +6679,7 @@ ItemAppearance:Slider({
 local PlayerControl = ESPTab:Section({Title = "Player tracking", Side = "right"})
 PlayerControl:Toggle({
     Title = "Player ESP",
-    Desc = "Show highlights and information labels for other players.",
+    Desc = "Highlight other players.",
     Icon = "users",
     Value = false,
     Callback = function(state)
@@ -6695,35 +6695,35 @@ PlayerControl:Toggle({
 })
 PlayerControl:Toggle({
     Title = "Show player name",
-    Desc = "Show the player's name at the top of their label.",
+    Desc = "Show player names.",
     Icon = "user-round",
     Value = Config.Esp.ShowPlayerName,
     Callback = function(state) Config.Esp.ShowPlayerName = state end,
 })
 PlayerControl:Toggle({
     Title = "Show health",
-    Desc = "Display health as a percentage of maximum health.",
+    Desc = "Show health percentage.",
     Icon = "heart-pulse",
     Value = Config.Esp.ShowHP,
     Callback = function(state) Config.Esp.ShowHP = state end,
 })
 PlayerControl:Toggle({
     Title = "Show distance",
-    Desc = "Display distance from your character in meters.",
+    Desc = "Show distance to the player.",
     Icon = "map-pin",
     Value = Config.Esp.ShowDistance,
     Callback = function(state) Config.Esp.ShowDistance = state end,
 })
 PlayerControl:Toggle({
     Title = "Show stand",
-    Desc = "Include the player's stand when available.",
+    Desc = "Show their stand.",
     Icon = "shield",
     Value = Config.Esp.ShowStand,
     Callback = function(state) Config.Esp.ShowStand = state end,
 })
 PlayerControl:Toggle({
     Title = "Show spec",
-    Desc = "Include the player's fighting style when available.",
+    Desc = "Show their fighting style.",
     Icon = "swords",
     Value = Config.Esp.ShowSpec,
     Callback = function(state) Config.Esp.ShowSpec = state end,
@@ -6732,7 +6732,7 @@ PlayerControl:Toggle({
 local PlayerAppearance = ESPTab:Section({Title = "Player appearance", Side = "right"})
 PlayerAppearance:ColorPicker({
     Title = "Player highlight color",
-    Desc = "Fill color for player highlight overlays.",
+    Desc = "Player fill color.",
     Default = Config.Esp.PlayerFillColor,
     Flag = "PhantomESPPlayerFillColor",
     Callback = function(color)
@@ -6743,7 +6743,7 @@ PlayerAppearance:ColorPicker({
 })
 PlayerAppearance:ColorPicker({
     Title = "Player outline color",
-    Desc = "Outline color for player highlight overlays.",
+    Desc = "Player outline color.",
     Default = Config.Esp.PlayerOutlineColor,
     Flag = "PhantomESPPlayerOutlineColor",
     Callback = function(color)
@@ -6754,7 +6754,7 @@ PlayerAppearance:ColorPicker({
 })
 PlayerAppearance:ColorPicker({
     Title = "Player name color",
-    Desc = "Text color for names and player details.",
+    Desc = "Player text color.",
     Default = Config.Esp.PlayerNameColor,
     Flag = "PhantomESPPlayerNameColor",
     Callback = function(color)
@@ -6765,7 +6765,7 @@ PlayerAppearance:ColorPicker({
 })
 PlayerAppearance:ColorPicker({
     Title = "Player text outline",
-    Desc = "Outline color behind player label text for readability.",
+    Desc = "Player text outline color.",
     Default = Config.Esp.PlayerTextOutlineColor,
     Flag = "PhantomESPPlayerTextOutlineColor",
     Callback = function(color)
@@ -6776,7 +6776,7 @@ PlayerAppearance:ColorPicker({
 })
 PlayerAppearance:Slider({
     Title = "Player fill transparency",
-    Desc = "Lower values make the player highlight more solid.",
+    Desc = "Lower values make the highlight more solid.",
     Value = {Min = 0, Max = 0.95, Default = Config.Esp.PlayerFillTransparency},
     Step = 0.05,
     Callback = function(value)
@@ -6786,7 +6786,7 @@ PlayerAppearance:Slider({
 })
 PlayerAppearance:Slider({
     Title = "Player outline transparency",
-    Desc = "Adjust how strong the player outline appears.",
+    Desc = "Change the outline strength.",
     Value = {Min = 0, Max = 0.95, Default = Config.Esp.PlayerOutlineTransparency},
     Step = 0.05,
     Callback = function(value)
@@ -6796,7 +6796,7 @@ PlayerAppearance:Slider({
 })
 PlayerAppearance:Slider({
     Title = "Player label size",
-    Desc = "Text size for player names and details.",
+    Desc = "Player text size.",
     Value = {Min = 8, Max = 24, Default = Config.Esp.PlayerTextSize},
     Step = 1,
     Callback = function(value)
@@ -6808,7 +6808,7 @@ PlayerAppearance:Slider({
 local SellTab = Window:Tab({Title = "Selling", Icon = "dollar-sign"})
 SellTab:Toggle({
     Title = "Auto Sell on Max",
-    Desc = "Sell sellable items when they reach their configured inventory limit.",
+    Desc = "Sell items when they reach their limit.",
     Icon = "package-check",
     Value = true,
     Callback = function(state)
@@ -6818,7 +6818,7 @@ SellTab:Toggle({
 })
 SellTab:Dropdown({
     Title = "Auto Sell Items (on Pickup)",
-    Desc = "Choose items to sell automatically when picked up.",
+    Desc = "Choose what to sell when picked up.",
     Icon = "package",
     Values = itemOptions,
     Value = {},
@@ -6829,7 +6829,7 @@ SellTab:Dropdown({
 })
 SellTab:Toggle({
     Title = "Auto Sell Selected on Pickup",
-    Desc = "Automatically sell selected items when they enter your inventory.",
+    Desc = "Sell selected items automatically.",
     Icon = "mouse-pointer-click",
     Value = false,
     Callback = function(state)
@@ -6838,7 +6838,7 @@ SellTab:Toggle({
 })
 SellTab:Dropdown({
     Title = "Select Items to Sell All Now",
-    Desc = "Choose which items the manual button should sell.",
+    Desc = "Choose items for manual selling.",
     Icon = "list-check",
     Values = itemOptions,
     Value = {},
@@ -6849,7 +6849,7 @@ SellTab:Dropdown({
 })
 SellTab:Button({
     Title = "Sell All Selected Now",
-    Desc = "Sell only the selected items currently in your inventory.",
+    Desc = "Sell the selected items now.",
     Icon = "package-check",
     Callback = function()
         task.spawn(function() Selling.sellAllSelected(selectedSellAllItems) end)
@@ -6857,7 +6857,7 @@ SellTab:Button({
 })
 SellTab:Slider({
     Title = "Auto Sell Interval (minutes)",
-    Desc = "Interval for repeating the selected-items sell loop.",
+    Desc = "How often to repeat the sale.",
     Icon = "clock",
     Value = {Min = 1, Max = 10, Default = 3},
     Step = 1,
@@ -6867,7 +6867,7 @@ SellTab:Slider({
 })
 SellTab:Toggle({
     Title = "Auto Sell All Selected Loop",
-    Desc = "Repeat the selected-items sell action at the chosen interval.",
+    Desc = "Keep selling selected items on a loop.",
     Icon = "repeat",
     Value = false,
     Callback = function(state)
@@ -6895,7 +6895,7 @@ SellTab:Toggle({
 SellTab:Divider()
 SellTab:Button({
     Title = "Sell All Worthless Items",
-    Desc = "Sell coins, diamonds, gloves, hats, headbands, and ancient scrolls.",
+    Desc = "Sell coins, diamonds, gloves, hats, headbands, and scrolls.",
     Icon = "hand-coins",
     Callback = function()
         task.spawn(Selling.sellAllWorthless)
@@ -6903,7 +6903,7 @@ SellTab:Button({
 })
 SellTab:Button({
     Title = "Sell Inventory",
-    Desc = "Sell all currently sellable tools in your inventory.",
+    Desc = "Sell all sellable items.",
     Icon = "shopping-cart",
     Callback = function()
         task.spawn(Selling.sellInventory)
@@ -6926,11 +6926,11 @@ local function miscNotify(title, content, kind)
 end
 _G.__MethionMiscSections.Dialogue:Paragraph({
     Title = "Dialogue / Skills",
-    Desc = "Trigger selected NPC dialogue prompts and learn character skills.",
+    Desc = "NPC dialogue and character skills.",
 })
 _G.__MethionMiscSections.Dialogue:Button({
     Title = "Talk to Jesus",
-    Desc = "Trigger the Jesus dialogue prompt.",
+    Desc = "Talk to Jesus.",
     Icon = "message-circle",
     Callback = function()
         task.spawn(function()
@@ -6964,7 +6964,7 @@ end
 
 _G.__MethionMiscSections.Environment:Toggle({
     Title = "Anti Vamp Burn",
-    Desc = "Keep your race set to Human to prevent vampire sun damage.",
+    Desc = "Stay human to avoid sun damage.",
     Icon = "moon",
     Value = false,
     Callback = function(state)
@@ -6993,7 +6993,7 @@ _G.__MethionMiscSections.Environment:Toggle({
 
 _G.__MethionMiscSections.Dialogue:Button({
     Title = "Learn Worthiness",
-    Desc = "Request Worthiness I through V from the Character skill tree.",
+    Desc = "Learn Worthiness I–V.",
     Icon = "book-open",
     Callback = function()
         task.spawn(function()
@@ -7025,7 +7025,7 @@ local MovementSection = _G.__MethionMiscSections.Movement
 MovementSection:Divider()
 MovementSection:Toggle({
     Title = "No-Clip",
-    Desc = "Walk through walls",
+    Desc = "Walk through walls.",
     Icon = "shield-off",
     Value = false,
     Callback = function(state)
@@ -7155,13 +7155,13 @@ end
 
 MovementSection:Button({
     Title = "Give ClickTP Tool",
-    Desc = "Equip the tool and click to teleport to that location.",
+    Desc = "Equip the tool and click where you want to go.",
     Icon = "mouse-pointer-2",
     Callback = giveClickTpTool,
 })
 MovementSection:Slider({
     Title = "WalkSpeed",
-    Desc = "WalkSpeed value used while Enable WalkSpeed is on.",
+    Desc = "Speed while WalkSpeed is enabled.",
     Icon = "gauge",
     Value = {Min = 1, Max = 200, Default = 24},
     Step = 1,
@@ -7172,7 +7172,7 @@ MovementSection:Slider({
 })
 MovementSection:Toggle({
     Title = "Enable WalkSpeed",
-    Desc = "Continuously apply the selected speed, including after respawning.",
+    Desc = "Keep this speed after respawning.",
     Icon = "footprints",
     Value = false,
     Callback = function(enabled)
@@ -7192,7 +7192,7 @@ MovementSection:Toggle({
 })
 MovementSection:Toggle({
     Title = "GER Float",
-    Desc = "Use the float animation and keep vertical velocity at zero.",
+    Desc = "Use the floating animation.",
     Icon = "move-vertical",
     Value = false,
     Callback = function(enabled)
@@ -7205,7 +7205,7 @@ MovementSection:Toggle({
 })
 MovementSection:Slider({
     Title = "JumpPower",
-    Desc = "JumpPower value used while Enable JumpPower is on.",
+    Desc = "Jump power while enabled.",
     Icon = "arrow-up",
     Value = {Min = 1, Max = 200, Default = 24},
     Step = 1,
@@ -7216,7 +7216,7 @@ MovementSection:Slider({
 })
 MovementSection:Toggle({
     Title = "Enable JumpPower",
-    Desc = "Continuously apply the selected jump power, including after respawning.",
+    Desc = "Keep this jump power after respawning.",
     Icon = "arrow-up-right",
     Value = false,
     Callback = function(enabled)
@@ -7259,7 +7259,7 @@ local function setAutoSprint(enabled)
 end
 MovementSection:Toggle({
     Title = "Auto Sprint",
-    Desc = "Automatically toggle sprinting whenever your character is not sprinting.",
+    Desc = "Sprint automatically.",
     Icon = "zap",
     Value = false,
     Callback = function(enabled)
@@ -7747,7 +7747,7 @@ end
 
 StandPilotSection:Button({
     Title = "Toggle Stand",
-    Desc = "Summon or desummon your current stand.",
+    Desc = "Summon or hide your stand.",
     Icon = "user-round",
     Callback = function()
         task.spawn(function()
@@ -7767,7 +7767,7 @@ StandPilotSection:Button({
 })
 StandPilotSection:Toggle({
     Title = "Stand Pilot",
-    Desc = "Control the stand with your movement input while your character follows below it.",
+    Desc = "Move your stand while your character follows.",
     Icon = "user-round-cog",
     Value = false,
     Callback = function(enabled)
@@ -7782,7 +7782,7 @@ StandPilotSection:Toggle({
 })
 StandPilotSection:Slider({
     Title = "Walk Speed",
-    Desc = "Speed used while walking (1-100).",
+    Desc = "Walking speed (1–100).",
     Icon = "footprints",
     Value = {Min = 1, Max = 100, Default = 16},
     Step = 1,
@@ -7792,7 +7792,7 @@ StandPilotSection:Slider({
 })
 StandPilotSection:Slider({
     Title = "Run Speed",
-    Desc = "Speed used while sprinting or holding Shift (1-150).",
+    Desc = "Running speed (1–150).",
     Icon = "gauge",
     Value = {Min = 1, Max = 150, Default = 44},
     Step = 1,
@@ -7802,7 +7802,7 @@ StandPilotSection:Slider({
 })
 StandPilotSection:Toggle({
     Title = "Inf Pilot Range",
-    Desc = "Keep the stand's pilot range value extended while enabled.",
+    Desc = "Extend stand pilot range.",
     Icon = "scan",
     Value = false,
     Callback = function(enabled)
@@ -7837,7 +7837,7 @@ end)
 
 end
 
-local TrollingTab = Window:Tab({Title = "Trolling", Icon = "target", Desc = "Target selection and stand-specific tools."})
+local TrollingTab = Window:Tab({Title = "Trolling", Icon = "target", Desc = "Player targeting tools."})
 _G.__MethionTrollingSections = _G.__MethionTrollingSections or {}
 _G.__MethionTrollingSections.Targets = TrollingTab:Section({Title = "Target Selection", Side = "left"})
 _G.__MethionTrollingSections.Sticky = TrollingTab:Section({Title = "Sticky Fingers Pull", Side = "left"})
@@ -7848,7 +7848,7 @@ local TrollKidnapSection = _G.__MethionTrollingSections.Kidnap
 
 TrollTargetsSection:Paragraph({
     Title = "Choose Targets",
-    Desc = "Select one or more players for Sticky Fingers Pull and Mr. President Kidnapper.",
+    Desc = "Choose players for Sticky Fingers or Mr. President.",
 })
 
 local function buildPlayerList()
@@ -7888,7 +7888,7 @@ local function rebuildTrollDropdown()
     end
     trollDropdown = TrollTargetsSection:Dropdown({
         Title = "Target Players",
-        Desc = "Select multiple players to target.",
+        Desc = "Choose one or more players.",
         Icon = "users",
         Values = list,
         Value = current,
@@ -7909,7 +7909,7 @@ end
 
 TrollTargetsSection:Button({
     Title = "Select All Players",
-    Desc = "Select every other player currently in the server.",
+    Desc = "Select everyone else in the server.",
     Icon = "users-round",
     Callback = function()
         local names = {}
@@ -7924,7 +7924,7 @@ TrollTargetsSection:Button({
 })
 TrollTargetsSection:Button({
     Title = "Refresh Player List",
-    Desc = "Update available targets after players join or leave.",
+    Desc = "Refresh the player list.",
     Icon = "refresh-cw",
     Callback = function()
         rebuildTrollDropdown()
@@ -7949,11 +7949,11 @@ local stickyPullToggle = nil
 _G.__MethionStickyFingersActive = false
 TrollStickySection:Paragraph({
     Title = "Sticky Fingers Pull",
-    Desc = "Keep selected targets in front of you while using Sticky Fingers. Requires Sticky Fingers equipped.",
+    Desc = "Pull selected players in front of you. Equip Sticky Fingers first.",
 })
 stickyPullToggle = TrollStickySection:Toggle({
     Title = "Enable Sticky Fingers Pull",
-    Desc = "Continuously bring selected targets close in front of your character.",
+    Desc = "Pull selected players in front of you.",
     Icon = "move-3d",
     Value = false,
     Callback = function(state)
@@ -7995,7 +7995,7 @@ stickyPullToggle = TrollStickySection:Toggle({
 
 TrollKidnapSection:Paragraph({
     Title = "Mr. President",
-    Desc = "Attempts the Kidnap action on a selected target. Requires Mr. President and an available Kidnap move.",
+    Desc = "Use Mr. President's kidnap move on your target.",
 })
 local kidnapTargetName = "--"
 local kidnapManualName = ""
@@ -8158,14 +8158,14 @@ end
 
 kidnapDropdown = TrollKidnapSection:Dropdown({
     Title = "Select Player to Kidnap",
-    Desc = "Used unless Shuffle or Manual Target is enabled.",
+    Desc = "Target used by default.",
     Values = buildPlayerList(),
     Value = kidnapTargetName,
     Callback = function(name) kidnapTargetName = tostring(name or "--") end,
 })
 TrollKidnapSection:Button({
     Title = "Refresh Kidnap Targets",
-    Desc = "Update the target list and clear the current selection.",
+    Desc = "Refresh the list and clear your selection.",
     Icon = "refresh-cw",
     Callback = function()
         pcall(function() kidnapDropdown:Refresh(buildPlayerList(), false) end)
@@ -8176,14 +8176,14 @@ TrollKidnapSection:Button({
 })
 TrollKidnapSection:Toggle({
     Title = "Shuffle Random Target",
-    Desc = "Choose a random other player each time the move is available.",
+    Desc = "Pick a random player each time.",
     Icon = "shuffle",
     Value = false,
     Callback = function(state) kidnapShuffle = state == true end,
 })
 TrollKidnapSection:Input({
     Title = "Manual Target Name",
-    Desc = "Optional username prefix. Takes priority over the dropdown and shuffle.",
+    Desc = "Enter part of a username. This overrides the other target options.",
     Icon = "search",
     Value = "",
     Placeholder = "Enter username or prefix",
@@ -8191,7 +8191,7 @@ TrollKidnapSection:Input({
 })
 kidnapToggle = TrollKidnapSection:Toggle({
     Title = "Enable Mr. President Kidnapper",
-    Desc = "Checks the Kidnap cooldown and attempts the move about every 14 seconds.",
+    Desc = "Try the move when it is ready, about every 14 seconds.",
     Icon = "package",
     Value = false,
     Callback = function(state)
@@ -9071,7 +9071,7 @@ _G.__MethionStandModels.LoadPlayerCharacter = function(username)
         pcall(function() state.Dropdown:Set(label) end)
     end
     _G.__MethionStandModels.SelectModel(label)
-    _G.__MethionStandModels.SetStatus("Loaded Roblox character @" .. username .. " (userId " .. tostring(userId) .. "). This works for offline public avatars; it cannot recover their YBA-specific stand/skin unless the game replicates that stand model.")
+    _G.__MethionStandModels.SetStatus("Loaded avatar @" .. username .. ".")
     return true, label
 end
 
@@ -9081,16 +9081,16 @@ local function skinsNotify(title, content, kind)
     end)
 end
 
-_G.__MethionStandModels.Tab = Window:Tab({Title = "Skins", Icon = "user-round-cog", Desc = "Browse replicated skins or load public Roblox avatar models by username."})
+_G.__MethionStandModels.Tab = Window:Tab({Title = "Skins", Icon = "user-round-cog", Desc = "View skins or load a player avatar."})
 _G.__MethionStandModels.LibrarySection = _G.__MethionStandModels.Tab:Section({Title = "Skin Library", Side = "left"})
 _G.__MethionStandModels.ViewerSection = _G.__MethionStandModels.Tab:Section({Title = "Live Skin Preview", Side = "right"})
 _G.__MethionStandModels.LibrarySection:Paragraph({
     Title = "Skins & Player Avatars",
-    Desc = "Live skins are read from replicated StandMorphs. To add any public Roblox avatar even when offline, enter the exact username below. An offline avatar is not the same as their private YBA stand skin.",
+    Desc = "Choose a skin from the list or enter a username to load that player’s avatar.",
 })
 _G.__MethionStandModels.PlayerNameBox = _G.__MethionStandModels.LibrarySection:Input({
     Title = "Player Username",
-    Desc = "Exact Roblox username, online or offline.",
+    Desc = "Enter a Roblox username.",
     Placeholder = "username",
     Value = "",
     Callback = function(value)
@@ -9099,7 +9099,7 @@ _G.__MethionStandModels.PlayerNameBox = _G.__MethionStandModels.LibrarySection:I
 })
 _G.__MethionStandModels.LibrarySection:Button({
     Title = "Load Player Character",
-    Desc = "Load a public Roblox avatar by username, including offline accounts. If Use this model is enabled, it applies automatically.",
+    Desc = "Load the player’s avatar by username.",
     Icon = "user-round-search",
     Callback = function()
         task.spawn(function()
@@ -9117,10 +9117,10 @@ _G.__MethionStandModels.LibrarySection:Button({
         end)
     end,
 })
-_G.__MethionStandModels.Status = _G.__MethionStandModels.LibrarySection:Paragraph({Title = "Scan status", Desc = "Refresh to find live stand skins, or load a Roblox character by username."})
+_G.__MethionStandModels.Status = _G.__MethionStandModels.LibrarySection:Paragraph({Title = "Scan status", Desc = "Refresh the list or enter a username."})
 _G.__MethionStandModels.Dropdown = _G.__MethionStandModels.LibrarySection:Dropdown({
     Title = "Skin / Player Avatar",
-    Desc = "Includes online players' replicated skins and Roblox character avatars loaded by username.",
+    Desc = "Available skins and loaded player avatars.",
     Values = {"Press Refresh Skins"},
     Value = "Press Refresh Skins",
     Multi = false,
@@ -9130,7 +9130,7 @@ _G.__MethionStandModels.Dropdown = _G.__MethionStandModels.LibrarySection:Dropdo
 })
 _G.__MethionStandModels.LibrarySection:Button({
     Title = "Refresh Skins",
-    Desc = "Scan online players for their current skins; previously loaded offline avatar models remain in the list.",
+    Desc = "Refresh the skin list.",
     Icon = "refresh-cw",
     Callback = function()
         task.spawn(function()
@@ -9148,7 +9148,7 @@ _G.__MethionStandModels.LibrarySection:Button({
 })
 _G.__MethionStandModels.UseToggle = _G.__MethionStandModels.LibrarySection:Toggle({
     Title = "Use this model",
-    Desc = "Overlay the selected model locally. It stays enabled while your stand is unequipped and reapplies when you summon it again. This is client-side only.",
+    Desc = "Use this model for your stand. Only you can see it.",
     Icon = "eye",
     Value = false,
     Callback = function(enabled)
@@ -9170,10 +9170,10 @@ _G.__MethionStandModels.UseToggle = _G.__MethionStandModels.LibrarySection:Toggl
         end
     end,
 })
-_G.__MethionStandModels.ViewerStatus = _G.__MethionStandModels.ViewerSection:Paragraph({Title = "Selected skin / avatar", Desc = "Select a skin or load a Roblox avatar to preview it here."})
+_G.__MethionStandModels.ViewerStatus = _G.__MethionStandModels.ViewerSection:Paragraph({Title = "Selected skin / avatar", Desc = "Choose a skin or load an avatar to preview it."})
 _G.__MethionStandModels.Viewer = _G.__MethionStandModels.ViewerSection:Viewer({
     Name = "Selected Skin / Avatar",
-    Desc = "Preview the selected stand skin or Roblox avatar.",
+    Desc = "Preview the selected model.",
     Players = false,
     Height = 280,
     Float = false,
@@ -9193,19 +9193,19 @@ task.spawn(function()
     pcall(function() _G.__MethionStandModels.Scan() end)
 end)
 
-local TeleportsTab = Window:Tab({Title = "Teleports", Icon = "map-pin", Desc = "Landmarks, custom coordinates, and player travel."})
+local TeleportsTab = Window:Tab({Title = "Teleports", Icon = "map-pin", Desc = "Teleport to places or players."})
 _G.__PhantomRemadeUI = _G.__PhantomRemadeUI or {}
 
 _G.__PhantomRemadeUI.TeleportQuickSection = TeleportsTab:Section({Title = "Quick Destinations", Side = "left"})
 _G.__PhantomRemadeUI.TeleportQuickSection:Paragraph({
     Title = "Map Landmarks",
-    Desc = "Choose a known destination or use a one-tap landmark below.",
+    Desc = "Choose a place to teleport to.",
 })
 
 _G.__PhantomRemadeUI.TeleportToolsSection = TeleportsTab:Section({Title = "Travel Tools", Side = "right"})
 _G.__PhantomRemadeUI.TeleportToolsSection:Dropdown({
     Title = "Destination",
-    Desc = "Select a landmark to use with the travel button.",
+    Desc = "Choose where to go.",
     Values = Config.Teleport.LocationNames,
     Value = Config.Teleport.SelectedLocation,
     Callback = function(selected)
@@ -9216,13 +9216,13 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Dropdown({
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Dropdown({
     Title = "Travel Mode",
-    Desc = bypassSupported and "Instant moves directly; Tween travels at the configured speed." or "Instant is unavailable because this executor did not pass the bypass check. Tween is forced.",
+    Desc = bypassSupported and "Instant moves you there right away. Tween moves you smoothly." or "Instant isn't available here. Tween is enabled.",
     Values = bypassSupported and {"Instant", "Tween"} or {"Tween"},
     Value = Config.Teleport.Mode,
     Callback = function(selected)
         if selected == "Instant" and not bypassSupported then
             Config.Teleport.Mode = "Tween"
-            AirflowCompat:Notify({Title = "Instant unavailable", Content = "This executor did not pass the bypass check. Tween remains enabled.", Type = "Warning", Duration = 4})
+            AirflowCompat:Notify({Title = "Instant unavailable", Content = "Instant mode isn't supported here. Tween stays on.", Type = "Warning", Duration = 4})
             return
         end
         if selected == "Instant" or selected == "Tween" then
@@ -9232,7 +9232,7 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Dropdown({
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Button({
     Title = "Teleport to Destination",
-    Desc = "Travel to the selected landmark.",
+    Desc = "Go to the selected place.",
     Icon = "map-pin",
     Callback = function()
         local destination = Config.Teleport.Locations[Config.Teleport.SelectedLocation]
@@ -9245,7 +9245,7 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Button({
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Button({
     Title = "Save Current Position",
-    Desc = "Store this exact position for later.",
+    Desc = "Save where you are now.",
     Icon = "bookmark",
     Callback = function()
         local character = LP.Character
@@ -9257,7 +9257,7 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Button({
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Button({
     Title = "Return to Saved Position",
-    Desc = "Go back to the position you saved above.",
+    Desc = "Return to your saved spot.",
     Icon = "corner-up-left",
     Callback = function()
         if not Config.Teleport.SavedPosition then
@@ -9269,7 +9269,7 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Button({
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Button({
     Title = "Return to Last Position",
-    Desc = "Return to where you were before your latest teleport.",
+    Desc = "Go back to where you were before your last teleport.",
     Icon = "history",
     Callback = function()
         if not Config.Teleport.LastPosition then
@@ -9282,7 +9282,7 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Button({
 _G.__PhantomRemadeUI.TeleportToolsSection:Divider()
 _G.__PhantomRemadeUI.TeleportToolsSection:Paragraph({
     Title = "Custom Coordinates",
-    Desc = "Enter X, Y, and Z coordinates, then teleport to that point.",
+    Desc = "Enter X, Y, and Z to teleport there.",
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Input({
     Title = "Coordinate X",
@@ -9304,7 +9304,7 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Input({
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Button({
     Title = "Teleport to Coordinates",
-    Desc = "Rejects blank or unusually large coordinate values.",
+    Desc = "Enter valid X, Y, and Z values.",
     Icon = "crosshair",
     Callback = function()
         local x, y, z = tonumber(Config.Teleport.X), tonumber(Config.Teleport.Y), tonumber(Config.Teleport.Z)
@@ -9317,7 +9317,7 @@ _G.__PhantomRemadeUI.TeleportToolsSection:Button({
 })
 _G.__PhantomRemadeUI.TeleportToolsSection:Button({
     Title = "Teleport to Selected Player",
-    Desc = "Uses the player selected in Player Info.",
+    Desc = "Teleport to the player you selected in Player Info.",
     Icon = "user-round",
     Callback = function()
         local target = State.SelectedPlayer
@@ -9346,7 +9346,7 @@ for _, name in ipairs(Config.Teleport.LocationNames) do
     })
 end
 
-local ShopTab = Window:Tab({Title = "Shop", Icon = "shopping-cart", Desc = "NPC dialogue, fighting styles, and item purchases."})
+local ShopTab = Window:Tab({Title = "Shop", Icon = "shopping-cart", Desc = "Buy items and fighting styles."})
 ShopTab:Header("Shop & Trainer Center")
 _G.__MethionShopSections = _G.__MethionShopSections or {}
 _G.__MethionShopSections.Dialogues = ShopTab:Section({Title = "NPCs & Special Dialogue", Side = "left"})
@@ -9387,7 +9387,7 @@ local function fireNpc(npcName)
     end
     local remote = shopRemoteEvent()
     if not npc or not remote then
-        shopNotify("Shop", "Could not find dialogue or RemoteEvent for " .. tostring(npcName) .. ".", "Warning")
+        shopNotify("Shop", "Could not open dialogue for " .. tostring(npcName) .. ".", "Warning")
         return false
     end
     local ok, err = pcall(function() remote:FireServer("PromptTriggered", npc) end)
@@ -9402,7 +9402,7 @@ local function fireDialogueChoice(npcName, dialogueName, optionName)
     end
     local remote = shopRemoteEvent()
     if not remote then
-        shopNotify("Shop", "Character RemoteEvent is not ready.", "Warning")
+        shopNotify("Shop", "Your character isn't ready yet.", "Warning")
         return false
     end
     local ok, err = pcall(function()
@@ -9442,7 +9442,7 @@ local function shopBuyRequest(itemName, price)
     end
     local remote = shopRemoteEvent()
     if not remote then
-        shopNotify("Shop", "Character RemoteEvent is not ready.", "Warning")
+        shopNotify("Shop", "Your character isn't ready yet.", "Warning")
         return
     end
     local ok, err = pcall(function()
@@ -9466,7 +9466,7 @@ end
 
 ShopDialoguesSection:Paragraph({
     Title = "Trainer Dialogues",
-    Desc = "Open NPC dialogue directly. Some trainers require additional items, money, or a manual dialogue choice.",
+    Desc = "Open trainer dialogue. Some trainers need items or money.",
 })
 for _, entry in ipairs({
     {"Vampirism Trainer", "Vampirism Trainer"},
@@ -9512,7 +9512,7 @@ end)
 
 ShopStylesSection:Paragraph({
     Title = "Fighting Style Purchases",
-    Desc = "Checks your money and prerequisite items before sending the purchase dialogue.",
+    Desc = "Check each button for the items and money you need.",
 })
 addShopButton(ShopStylesSection, "Reset Fighting Style", "Requires 3 Diamonds and $5,000.", "refresh-cw", function()
     if not shopHasItem("Diamond", 3) or Utils.money() < 5000 then
@@ -9603,7 +9603,7 @@ end)
 
 ShopItemsSection:Paragraph({
     Title = "Item Purchases",
-    Desc = "Send purchase requests after checking the listed money requirement.",
+    Desc = "Buy items. Prices are shown on each button.",
 })
 for _, entry in ipairs({
     {"Lucky Arrow", "1x Lucky Arrow", 75000},
@@ -9619,7 +9619,7 @@ for _, entry in ipairs({
 end
 ShopPartsSection:Paragraph({
     Title = "Saint's Corpse Parts",
-    Desc = "Purchase individual parts when you have enough money.",
+    Desc = "Buy Saint’s Corpse parts.",
 })
 for _, entry in ipairs({
     {"Rib Cage of the Saint's Corpse", "1x Rib Cage of the Saint's Corpse", 3500},
@@ -9644,28 +9644,28 @@ addShopButton(ShopConsumablesSection, "Buy Tea", "Costs $50.", "coffee", functio
     if fireDialogueChoice("Cafe", "Dialogue2", "Option1") then shopNotify("Shop", "Tea request sent.", "Success") end
 end)
 
-local WeatherTab = Window:Tab({Title = "Weather", Icon = "cloud", Desc = "Client-side lighting and atmosphere previews."})
+local WeatherTab = Window:Tab({Title = "Weather", Icon = "cloud", Desc = "Change how the game looks on your screen."})
 WeatherTab:Header("Weather Studio")
 WeatherTab:Paragraph({
     Title = "Local Visual Settings",
-    Desc = "These presets change your local lighting and atmosphere only; they do not change server weather.",
+    Desc = "These settings only change what you see.",
 })
 _G.__PhantomRemadeUI.WeatherPresets = WeatherTab:Section({Title = "Weather Presets", Side = "left"})
 _G.__PhantomRemadeUI.WeatherSettings = WeatherTab:Section({Title = "Lighting Controls", Side = "right"})
 UIRefs.weatherPresetLabel = _G.__PhantomRemadeUI.WeatherPresets:Paragraph({Title = "Active Preset", Desc = "Original"})
 UIRefs.weatherTimeLabel = _G.__PhantomRemadeUI.WeatherPresets:Paragraph({Title = "Local Clock Time", Desc = string.format("%.2f", Lighting.ClockTime)})
 _G.__PhantomRemadeUI.WeatherPresets:Divider()
-_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Clear", Desc = "Bright midday with a clear atmosphere.", Icon = "sun", Callback = function() Weather.apply("Clear") end})
-_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Sunny", Desc = "Warm daylight with sun rays.", Icon = "sunrise", Callback = function() Weather.apply("Sunny") end})
-_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Sunset", Desc = "Orange evening light.", Icon = "sunset", Callback = function() Weather.apply("Sunset") end})
-_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Overcast", Desc = "Muted light with a cloudy-looking atmosphere.", Icon = "cloud", Callback = function() Weather.apply("Overcast") end})
-_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Night", Desc = "Dark blue nighttime lighting.", Icon = "moon", Callback = function() Weather.apply("Night") end})
-_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Fog", Desc = "Dense atmosphere and shorter local visibility.", Icon = "cloud-fog", Callback = function() Weather.apply("Fog") end})
-_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Reset Weather", Desc = "Restore captured lighting, atmosphere, and sun rays.", Icon = "refresh-cw", Callback = Weather.reset})
+_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Clear", Desc = "Clear skies.", Icon = "sun", Callback = function() Weather.apply("Clear") end})
+_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Sunny", Desc = "Bright sunny lighting.", Icon = "sunrise", Callback = function() Weather.apply("Sunny") end})
+_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Sunset", Desc = "Sunset lighting.", Icon = "sunset", Callback = function() Weather.apply("Sunset") end})
+_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Overcast", Desc = "Cloudy lighting.", Icon = "cloud", Callback = function() Weather.apply("Overcast") end})
+_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Night", Desc = "Night lighting.", Icon = "moon", Callback = function() Weather.apply("Night") end})
+_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Fog", Desc = "Foggy lighting.", Icon = "cloud-fog", Callback = function() Weather.apply("Fog") end})
+_G.__PhantomRemadeUI.WeatherPresets:Button({Title = "Reset Weather", Desc = "Restore the original lighting.", Icon = "refresh-cw", Callback = Weather.reset})
 
 _G.__PhantomRemadeUI.WeatherSettings:Toggle({
     Title = "Manual Time of Day",
-    Desc = "Allow the time slider to control the local clock.",
+    Desc = "Let the slider change the time.",
     Icon = "clock",
     Value = false,
     Callback = function(state)
@@ -9689,7 +9689,7 @@ _G.__PhantomRemadeUI.WeatherSettings:Slider({
 })
 _G.__PhantomRemadeUI.WeatherSettings:Slider({
     Title = "Brightness",
-    Desc = "Adjust local scene brightness.",
+    Desc = "Set the brightness.",
     Icon = "sun",
     Value = {Min = 0, Max = 4, Default = math.clamp(Lighting.Brightness, 0, 4)},
     Step = 0.1,
@@ -9697,7 +9697,7 @@ _G.__PhantomRemadeUI.WeatherSettings:Slider({
 })
 _G.__PhantomRemadeUI.WeatherSettings:Slider({
     Title = "Atmosphere Density",
-    Desc = "Raise the value for a thicker local haze.",
+    Desc = "Set the fog thickness.",
     Icon = "cloud-fog",
     Value = {Min = 0, Max = 0.8, Default = math.clamp(weatherOrig.AtmosphereDensity, 0, 0.8)},
     Step = 0.05,
@@ -9705,18 +9705,18 @@ _G.__PhantomRemadeUI.WeatherSettings:Slider({
 })
 _G.__PhantomRemadeUI.WeatherSettings:Toggle({
     Title = "Sun Rays",
-    Desc = "Enable or disable the local sun-ray effect.",
+    Desc = "Toggle sun rays.",
     Icon = "sun",
     Value = weatherOrig.SunRaysEnabled,
     Callback = function(state) Weather.setSunRays(state) end,
 })
 Weather.updateStatus()
 
-local PlayerInfoTab = Window:Tab({Title = "Player Info", Icon = "info", Desc = "Inspect and travel to other players."})
+local PlayerInfoTab = Window:Tab({Title = "Player Info", Icon = "info", Desc = "View player stats and teleport to them."})
 PlayerInfoTab:Header("Player Inspector")
 PlayerInfoTab:Paragraph({
     Title = "Live Player Details",
-    Desc = "Select a player below. Available stats refresh automatically while this script is running.",
+    Desc = "Choose a player to see their stats.",
 })
 _G.__PhantomRemadeUI.PlayerTargetSection = PlayerInfoTab:Section({Title = "Player Target", Side = "left"})
 _G.__PhantomRemadeUI.PlayerOverviewSection = PlayerInfoTab:Section({Title = "Player Overview", Side = "left"})
@@ -9725,7 +9725,7 @@ _G.__PhantomRemadeUI.PlayerLoadoutSection = PlayerInfoTab:Section({Title = "Load
 
 _G.__PhantomPlayerInfoViewer = _G.__PhantomRemadeUI.PlayerProgressSection:Viewer({
     Name = "Selected Player Viewer",
-    Desc = "Automatically follows the player selected in Player Info.",
+    Desc = "Follow the selected player automatically.",
     Players = true,
     Height = 240,
     Float = false,
@@ -9742,7 +9742,7 @@ _G.__PhantomPlayerInfoViewer = _G.__PhantomRemadeUI.PlayerProgressSection:Viewer
 UIRefs.targetPlayerLabel = _G.__PhantomRemadeUI.PlayerTargetSection:Paragraph({Title = "Selected Target", Desc = "None selected"})
 _G.__PhantomRemadeUI.PlayerDropdown = _G.__PhantomRemadeUI.PlayerTargetSection:Dropdown({
     Title = "Select Player",
-    Desc = "Choose any other player in the server.",
+    Desc = "Choose a player.",
     Values = PlayerInfo.listPlayers(),
     Value = State.SelectedPlayer and State.SelectedPlayer.Name or "-- Select player --",
     Callback = function(name)
@@ -9755,7 +9755,7 @@ _G.__PhantomRemadeUI.PlayerDropdown = _G.__PhantomRemadeUI.PlayerTargetSection:D
 })
 _G.__PhantomRemadeUI.PlayerTargetSection:Input({
     Title = "Search Player",
-    Desc = "Search by username or display name; partial matches work.",
+    Desc = "Search by username or display name.",
     Icon = "search",
     Value = "",
     Placeholder = "Username or display name",
@@ -9769,7 +9769,7 @@ _G.__PhantomRemadeUI.PlayerTargetSection:Input({
 })
 _G.__PhantomRemadeUI.PlayerTargetSection:Button({
     Title = "Refresh Player List",
-    Desc = "Update the dropdown after players join or leave.",
+    Desc = "Refresh the player list.",
     Icon = "refresh-cw",
     Callback = function()
         PlayerInfo.refreshList()
@@ -9778,7 +9778,7 @@ _G.__PhantomRemadeUI.PlayerTargetSection:Button({
 })
 _G.__PhantomRemadeUI.PlayerTargetSection:Button({
     Title = "Select Nearest Player",
-    Desc = "Select the nearest living player to your character.",
+    Desc = "Select the closest player.",
     Icon = "locate-fixed",
     Callback = function()
         local target, distance = PlayerInfo.selectNearest()
@@ -9794,7 +9794,7 @@ _G.__PhantomRemadeUI.PlayerTargetSection:Button({
 })
 _G.__PhantomRemadeUI.SpectateToggle = _G.__PhantomRemadeUI.PlayerTargetSection:Toggle({
     Title = "Spectate Target",
-    Desc = "Use Roblox's normal spectate camera for the selected player. It stays enabled through their respawn; toggle off to return.",
+    Desc = "Watch the selected player. Turn this off to return.",
     Icon = "eye",
     Value = false,
     Callback = function(enabled)
@@ -9825,7 +9825,7 @@ _G.__PhantomRemadeUI.SpectateToggle = _G.__PhantomRemadeUI.PlayerTargetSection:T
 })
 _G.__PhantomRemadeUI.PlayerTargetSection:Button({
     Title = "Teleport to Target",
-    Desc = "Move to a safe offset near the selected player.",
+    Desc = "Teleport near the selected player.",
     Icon = "map-pin",
     Callback = function()
         local target = State.SelectedPlayer
@@ -9840,7 +9840,7 @@ _G.__PhantomRemadeUI.PlayerTargetSection:Button({
 })
 _G.__PhantomRemadeUI.PlayerTargetSection:Button({
     Title = "Teleport Behind Target",
-    Desc = "Move a few studs behind the selected player.",
+    Desc = "Teleport behind the selected player.",
     Icon = "corner-up-right",
     Callback = function()
         local target = State.SelectedPlayer
@@ -9855,7 +9855,7 @@ _G.__PhantomRemadeUI.PlayerTargetSection:Button({
 })
 _G.__PhantomRemadeUI.PlayerTargetSection:Button({
     Title = "Copy Username",
-    Desc = "Copy the selected player's username if clipboard access is available.",
+    Desc = "Copy the selected player’s username.",
     Icon = "copy",
     Callback = function()
         local target = State.SelectedPlayer
@@ -9919,16 +9919,16 @@ Players.PlayerRemoving:Connect(function(plr)
     end)
 end)
 
-local SettingsTab = Window:Tab({Title = "Settings", Icon = "settings", Desc = "General, movement, and performance controls."})
+local SettingsTab = Window:Tab({Title = "Settings", Icon = "settings", Desc = "General settings."})
 _G.__MethionSettingsSections = _G.__MethionSettingsSections or {}
 _G.__MethionSettingsSections.General = SettingsTab:Section({Title = "General", Side = "left"})
 _G.__MethionSettingsSections.Movement = SettingsTab:Section({Title = "Movement", Side = "right"})
 _G.__MethionSettingsSections.Performance = SettingsTab:Section({Title = "Performance", Side = "left"})
 
-_G.__MethionSettingsSections.General:Paragraph({Title = "General Settings", Desc = "Controls that affect reconnect behavior and the main farming movement."})
+_G.__MethionSettingsSections.General:Paragraph({Title = "General Settings", Desc = "Rejoin and auto-farm settings."})
 _G.__MethionSettingsSections.General:Toggle({
     Title = "Auto Rejoin",
-    Desc = "Automatically rejoin on kick/disconnect",
+    Desc = "Rejoin after a kick or disconnect.",
     Icon = "refresh-cw",
     Value = true,
     Callback = function(state)
@@ -9937,10 +9937,10 @@ _G.__MethionSettingsSections.General:Toggle({
     end,
 })
 
-_G.__MethionSettingsSections.Movement:Paragraph({Title = "Movement", Desc = "Tune farming tween movement and arrival timing."})
+_G.__MethionSettingsSections.Movement:Paragraph({Title = "Movement", Desc = "Change auto-farm speed and pickup delay."})
 _G.__MethionSettingsSections.Movement:Slider({
     Title = "Tween Speed",
-    Desc = "Constant travel speed in studs/sec for every distance. Farther trips take longer; speed does not scale with distance.",
+    Desc = "Set how fast Tween moves you. Higher means faster.",
     Icon = "gauge",
     Value = {Min = 10, Max = 500, Default = 220},
     Step = 5,
@@ -9948,19 +9948,15 @@ _G.__MethionSettingsSections.Movement:Slider({
 })
 _G.__MethionSettingsSections.Movement:Slider({
     Title = "Instant Arrival Delay",
-    Desc = "Hold position after reaching an item so the character fully settles before pickup (seconds)",
+    Desc = "Wait a moment before picking up an item.",
     Icon = "timer",
     Value = {Min = 0.2, Max = 1.0, Default = 0.35},
     Step = 0.05,
     Callback = function(v) Config.InstantDelay = v end,
 })
-_G.__MethionSettingsSections.Movement:Paragraph({
-    Title = "Vilo",
-    Desc = "Hello?.",
-})
 _G.__MethionSettingsSections.Movement:Toggle({
     Title = "Boosted",
-    Desc = "Queues item spawn events, waits for parts/prompts to replicate, keeps lock-on through retries, verifies the full rig, waits 0.25s, then re-verifies before pickup. WARNING: may cause frequent kicks/disconnects. Instant mode only.",
+    Desc = "Faster item pickup. May get you kicked. Instant mode only.",
     Icon = "zap",
     Value = false,
     Callback = function(state)
@@ -9975,21 +9971,21 @@ _G.__MethionSettingsSections.Movement:Toggle({
         end
     end,
 })
-_G.__MethionSettingsSections.Performance:Paragraph({Title = "Performance", Desc = "A one-time visual reduction for lower-end devices. Rejoin to restore the original visuals."})
+_G.__MethionSettingsSections.Performance:Paragraph({Title = "Performance", Desc = "Use this if the game runs slowly. Rejoin to reset it."})
 _G.__MethionSettingsSections.Performance:Button({
     Title = "Low Graphics",
-    Desc = "Reduces textures, particles, and lighting (one-time, rejoin to reset)",
+    Desc = "Lowers graphics. Rejoin to reset.",
     Icon = "zap",
     Callback = function()
         if not State.LowGraphics then LowGfx.apply() end
     end,
 })
 
-local InfoTab = Window:Tab({Title = "Info", Icon = "layout-dashboard", Desc = "Live script overview, runtime diagnostics, and help."})
+local InfoTab = Window:Tab({Title = "Info", Icon = "layout-dashboard", Desc = "Script status and help."})
 InfoTab:Header("METHION  /  CONTROL CENTER")
 InfoTab:Paragraph({
     Title = "Script Dashboard",
-    Desc = "A live overview of your session, active systems, and setup status. Use Refresh Diagnostics for an immediate update or copy the report when asking for help.",
+    Desc = "Check what is working, or copy the status if you need help.",
 })
 
 do
@@ -10000,7 +9996,7 @@ do
 
     local sessionSection = InfoTab:Section({Title = "Session Overview", Side = "left"})
     local systemsSection = InfoTab:Section({Title = "Feature Status", Side = "right"})
-    local diagnosticsSection = InfoTab:Section({Title = "Runtime Diagnostics", Side = "left"})
+    local diagnosticsSection = InfoTab:Section({Title = "Status Check", Side = "left"})
     local helpSection = InfoTab:Section({Title = "Troubleshooting", Side = "right"})
     local aboutSection = InfoTab:Section({Title = "About Methion", Side = "right"})
 
@@ -10055,27 +10051,27 @@ do
     addInfoLabel(systemsSection, "Spectate", "Player Spectate", "Checking...")
     addInfoLabel(systemsSection, "LowGraphics", "Low Graphics", "Checking...")
 
-    addInfoLabel(diagnosticsSection, "Library", "UI Library", "Checking...")
-    addInfoLabel(diagnosticsSection, "Hook", "Returner Hook", "Checking...")
-    addInfoLabel(diagnosticsSection, "QuestModule", "Quest Module", "Checking...")
+    addInfoLabel(diagnosticsSection, "Library", "Interface", "Checking...")
+    addInfoLabel(diagnosticsSection, "Hook", "Instant Mode Support", "Checking...")
+    addInfoLabel(diagnosticsSection, "QuestModule", "Quest Farm", "Checking...")
     addInfoLabel(diagnosticsSection, "ItemScan", "Item Scan", "Checking...")
     addInfoLabel(diagnosticsSection, "Clipboard", "Clipboard Support", "Checking...")
 
     helpSection:Paragraph({
         Title = "Frequent Kicks or Unstable Movement",
-        Desc = "Lower Tween Speed in Settings. If the character reaches an item but fails to settle before pickup, raise Instant Arrival Delay slightly.",
+        Desc = "Lower Tween Speed. If pickups fail, raise Instant Arrival Delay a little.",
     })
     helpSection:Paragraph({
         Title = "Items Not Highlighting",
-        Desc = "Check that Item ESP is enabled. Some objects are intentionally ignored when their position is invalid or their part is invisible. Try the normal Tween movement mode if an instant method is unreliable.",
+        Desc = "Turn on Item ESP. If items still do not show, try Tween mode.",
     })
     helpSection:Paragraph({
-        Title = "Quest or Merchant Dialogue Stalls",
-        Desc = "Let the current dialogue finish before starting another interaction. Avoid clicking NPC options manually while a farm or selling action is handling that dialogue.",
+        Title = "Dialogue Gets Stuck",
+        Desc = "Let the current dialogue finish before starting another one. Avoid clicking options while farming or selling.",
     })
     helpSection:Paragraph({
-        Title = "Features That Depend on Executor Hooks",
-        Desc = "Hook support differs by executor. The diagnostic section shows whether the Returner hook was installed; a successful hook does not guarantee every executor-specific feature is supported.",
+        Title = "Some Features Not Working",
+        Desc = "Some features may not work on every executor. Check the status above.",
     })
 
     aboutSection:Paragraph({Title = "Project", Desc = "Methion"})
@@ -10089,10 +10085,10 @@ do
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
         local root = character and character:FindFirstChild("HumanoidRootPart")
         local jobId = tostring(game.JobId or "")
-        local shortJobId = jobId ~= "" and string.sub(jobId, 1, 8) or "Unavailable / private session"
+        local shortJobId = jobId ~= "" and string.sub(jobId, 1, 8) or "Private session"
         local characterStatus = "Respawning"
         if character then
-            characterStatus = humanoid and root and "Ready" or "Loading character parts"
+            characterStatus = humanoid and root and "Ready" or "Loading character"
         end
 
         setInfoLabel("Player", "@" .. tostring(LP.Name))
@@ -10123,7 +10119,7 @@ do
             setInfoLabel("QuestModule", "Loading or unavailable")
         end
         setInfoLabel("ItemScan", tostring(ItemESP.count()) .. " tracked  |  " .. tostring(#Pending) .. " pending")
-        setInfoLabel("Clipboard", type(setclipboard) == "function" and "Available" or "Unavailable in this executor")
+        setInfoLabel("Clipboard", type(setclipboard) == "function" and "Available" or "Not available here")
     end
 
     function dashboard:BuildSummary()
@@ -10152,33 +10148,33 @@ do
     end
 
     diagnosticsSection:Button({
-        Title = "Refresh Diagnostics",
-        Desc = "Immediately update the session and feature status above.",
+        Title = "Refresh Status",
+        Desc = "Refresh the status above.",
         Icon = "refresh-cw",
         Callback = function()
             local ok = pcall(function() dashboard:Refresh() end)
             AirflowCompat:Notify({
-                Title = "Info Dashboard",
-                Content = ok and "Diagnostics refreshed." or "A diagnostic value could not be read.",
+                Title = "Status",
+                Content = ok and "Status refreshed." or "A diagnostic value could not be read.",
                 Type = ok and "Success" or "Warning",
                 Duration = 3,
             })
         end,
     })
     diagnosticsSection:Button({
-        Title = "Copy Diagnostic Report",
-        Desc = "Copy useful session and feature details for troubleshooting.",
+        Title = "Copy Status Info",
+        Desc = "Copy the status details.",
         Icon = "copy",
         Callback = function()
             local report = dashboard:BuildSummary()
             if type(setclipboard) ~= "function" then
-                AirflowCompat:Notify({Title = "Info Dashboard", Content = "Clipboard access is unavailable in this executor.", Type = "Warning", Duration = 4})
+                AirflowCompat:Notify({Title = "Status", Content = "Clipboard copy isn't available here.", Type = "Warning", Duration = 4})
                 return
             end
             local copied = pcall(setclipboard, report)
             AirflowCompat:Notify({
-                Title = "Info Dashboard",
-                Content = copied and "Diagnostic report copied." or "Could not copy the report.",
+                Title = "Status",
+                Content = copied and "Status copied." or "Could not copy the status.",
                 Type = copied and "Success" or "Warning",
                 Duration = 3,
             })
@@ -12614,7 +12610,7 @@ Loops.spectate()
 Loops.playerInfo()
 Loops.counter()
 
-print("[METHION] Methion v1.2 loaded")
+print("[METHION] Methion v2 loaded")
 
 if bypassSupported then
     print("[METHION] Bypass installed successfully")
