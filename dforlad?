@@ -543,6 +543,8 @@ local Config = {
         ShowStand = false,
         ShowPlayerName = true,
         ShowItemDistance = true,
+        ItemTrackerPosition = "Bottom",
+        PlayerTrackerPosition = "Bottom",
         ItemUseTypeColors = false,
         ItemHighlightColor = Color3.fromRGB(255, 185, 46),
         ItemOutlineColor = Color3.fromRGB(255, 255, 255),
@@ -593,6 +595,8 @@ local State = {
     ItemEsp = true,
     NotifyItemSpawn = true,
     PlayerEsp = false,
+    ItemTracker = false,
+    PlayerTracker = false,
     Farm = false,
     HalloweenCandyFarm = false,
     HalloweenTurnInBusy = false,
@@ -947,8 +951,72 @@ function Gui.advanceUntilClosed(timeout)
     return Gui.currentDialogue() == nil
 end
 
+function Gui.forceCloseDialogue(timeout)
+    local deadline = tick() + (tonumber(timeout) or 3)
+    local lastSkip = 0
+
+    while tick() < deadline do
+        local gui = Gui.currentDialogue()
+        if not gui then return true end
+
+        local clickedClose = false
+        for _, descendant in ipairs(gui:GetDescendants()) do
+            if descendant:IsA("GuiButton") and Gui.isVisible(descendant) then
+                local buttonName = string.lower(tostring(descendant.Name or ""))
+                local buttonText = string.lower(tostring(descendant.Text or "")):gsub("%s+", "")
+                local isCloseButton = buttonName == "close" or buttonName == "closebutton"
+                    or buttonName == "exit" or buttonName == "exitbutton"
+                    or buttonName == "x" or buttonName == "xbutton"
+                    or buttonName == "skip" or buttonName == "skipbutton"
+                    or buttonText == "close" or buttonText == "exit"
+                    or buttonText == "x" or buttonText == "×" or buttonText == "skip"
+                if isCloseButton and Gui.click(descendant) then
+                    clickedClose = true
+                    break
+                end
+            end
+        end
+
+        if not clickedClose and tick() - lastSkip >= 0.15 then
+            Gui.skipClick()
+            lastSkip = tick()
+        end
+        task.wait(0.05)
+    end
+
+    local remaining = Gui.currentDialogue()
+    if remaining then
+        local frame = remaining:FindFirstChild("Frame")
+        if frame and frame:IsA("GuiObject") then
+            frame.Visible = false
+        elseif remaining:IsA("ScreenGui") then
+            remaining.Enabled = false
+        end
+    end
+    return Gui.currentDialogue() == nil
+end
+
 
 local ItemESP = {}
+
+function ItemESP.isPlayerOwned(obj, part)
+    local candidates = {part, obj}
+    for _, player in ipairs(Players:GetPlayers()) do
+        local character = player.Character
+        local backpack = player:FindFirstChild("Backpack")
+        for _, candidate in ipairs(candidates) do
+            if candidate and candidate.Parent then
+                if character and candidate:IsDescendantOf(character) then
+                    return true
+                end
+                if backpack and candidate:IsDescendantOf(backpack) then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
 
 function ItemESP.colorFor(name)
     if Config.Esp.ItemUseTypeColors and ESP_ITEMS[name] then
@@ -963,7 +1031,7 @@ function ItemESP.labelText(part, name)
         local character = LP.Character
         local root = character and character:FindFirstChild("HumanoidRootPart")
         if root and part and part.Parent then
-            text ..= "\n[" .. tostring(math.floor((part.Position - root.Position).Magnitude)) .. "m]"
+            text ..= "\n" .. tostring(math.floor((part.Position - root.Position).Magnitude)) .. " studs away"
         end
     end
     return text
@@ -971,6 +1039,13 @@ end
 
 function ItemESP.create(part, name, visible)
     if not part or not part.Parent then return end
+    if ItemESP.isPlayerOwned(nil, part) then
+        local existingHighlight = part:FindFirstChild("Phantom_ESP")
+        local existingLabel = part:FindFirstChild("Phantom_Label")
+        if existingHighlight then existingHighlight.Enabled = false end
+        if existingLabel then existingLabel.Enabled = false end
+        return
+    end
     local color = ItemESP.colorFor(name)
     local shouldShow = visible == true and State.ItemEsp == true
     local hl = part:FindFirstChild("Phantom_ESP")
@@ -1029,7 +1104,7 @@ end
 function ItemESP.refresh()
     for part, data in pairs(Tracked) do
         if part and part.Parent and part:IsDescendantOf(workspace) then
-            if not Utils.invisible(part) then
+            if not Utils.invisible(part) and not ItemESP.isPlayerOwned(data.Obj, part) then
                 ItemESP.create(part, data.Name, State.ItemEsp)
             else
                 local hl = part:FindFirstChild("Phantom_ESP")
@@ -1101,8 +1176,9 @@ end
 
 function ItemESP.count()
     local n = 0
-    for part in pairs(Tracked) do
-        if part and part:IsDescendantOf(workspace) and not Utils.invisible(part) then
+    for part, data in pairs(Tracked) do
+        if part and part:IsDescendantOf(workspace) and not Utils.invisible(part)
+            and not ItemESP.isPlayerOwned(data and data.Obj, part) then
             n = n + 1
         end
     end
@@ -1190,6 +1266,153 @@ function PlayerESP.remove(char)
         if bb then bb:Destroy() end
     end
 end
+
+local TrackerESP = {
+    Gui = nil,
+    Lines = {},
+}
+
+function TrackerESP.ensureGui()
+    if TrackerESP.Gui and TrackerESP.Gui.Parent then return TrackerESP.Gui end
+
+    local oldGui
+    local parent
+    pcall(function()
+        parent = game:GetService("CoreGui")
+        oldGui = parent:FindFirstChild("Phantom_ESPTrackers")
+    end)
+    if not parent then
+        parent = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui")
+        oldGui = parent:FindFirstChild("Phantom_ESPTrackers")
+    end
+    if oldGui then pcall(function() oldGui:Destroy() end) end
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "Phantom_ESPTrackers"
+    gui.IgnoreGuiInset = true
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 9999
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Parent = parent
+    TrackerESP.Gui = gui
+    return gui
+end
+
+function TrackerESP.lineFor(target)
+    local line = TrackerESP.Lines[target]
+    if line and line.Parent then return line end
+
+    line = Instance.new("Frame")
+    line.Name = "TrackerLine"
+    line.AnchorPoint = Vector2.new(0.5, 0.5)
+    line.BorderSizePixel = 0
+    line.BackgroundTransparency = 0.12
+    line.Size = UDim2.fromOffset(0, 2)
+    line.Visible = false
+    line.ZIndex = 20
+    line.Parent = TrackerESP.ensureGui()
+    TrackerESP.Lines[target] = line
+    return line
+end
+
+function TrackerESP.updateLine(target, worldPosition, position, color, active, frameActive)
+    if not active or not target or not target.Parent then return end
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+
+    local projected = camera:WorldToViewportPoint(worldPosition)
+    local viewport = camera.ViewportSize
+    if viewport.X <= 0 or viewport.Y <= 0 then return end
+
+    -- Anchor at the exact top/bottom edge, centered horizontally.
+    -- Bottom is flush with the very bottom of the viewport instead of floating above it.
+    local isTop = string.lower(tostring(position or "Bottom")) == "above"
+    local startPoint = Vector2.new(viewport.X * 0.5, isTop and 0 or (viewport.Y - 1))
+    local targetPoint = Vector2.new(projected.X, projected.Y)
+
+    -- Do not track off-screen targets or targets behind the camera.
+    -- This intentionally avoids drawing a line to the screen edge for unseen items/players.
+    local targetInside = projected.Z > 0
+        and targetPoint.X >= 0 and targetPoint.X <= viewport.X
+        and targetPoint.Y >= 0 and targetPoint.Y <= viewport.Y
+    if not targetInside then
+        local existing = TrackerESP.Lines[target]
+        if existing and existing.Parent then existing.Visible = false end
+        return
+    end
+
+    local delta = targetPoint - startPoint
+    local length = delta.Magnitude
+    local line = TrackerESP.lineFor(target)
+    if length < 1 then
+        line.Visible = false
+        return
+    end
+
+    -- GuiObject rotation pivots around its center. Place the frame at the segment
+    -- midpoint so the line runs from the fixed screen-edge anchor to the target.
+    line.AnchorPoint = Vector2.new(0.5, 0.5)
+    line.Position = UDim2.fromOffset(
+        (startPoint.X + targetPoint.X) * 0.5,
+        (startPoint.Y + targetPoint.Y) * 0.5
+    )
+    line.Size = UDim2.fromOffset(length, 2)
+    line.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+    line.BackgroundColor3 = color
+    line.Visible = true
+    frameActive[target] = true
+end
+
+RunService.RenderStepped:Connect(function()
+    local frameActive = {}
+
+    if State.ItemTracker then
+        for part, data in pairs(Tracked) do
+            if part and part.Parent and part:IsDescendantOf(workspace)
+                and Utils.validPos(part) and not Utils.invisible(part)
+                and not ItemESP.isPlayerOwned(data and data.Obj, part) then
+                TrackerESP.updateLine(
+                    part,
+                    part.Position,
+                    Config.Esp.ItemTrackerPosition,
+                    ItemESP.colorFor(data and data.Name or part.Name),
+                    true,
+                    frameActive
+                )
+            end
+        end
+    end
+
+    if State.PlayerTracker then
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LP and player.Character then
+                local character = player.Character
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                local root = character:FindFirstChild("HumanoidRootPart")
+                if humanoid and humanoid.Health > 0 and root then
+                    TrackerESP.updateLine(
+                        player,
+                        root.Position + Vector3.new(0, 1.5, 0),
+                        Config.Esp.PlayerTrackerPosition,
+                        Config.Esp.PlayerFillColor,
+                        true,
+                        frameActive
+                    )
+                end
+            end
+        end
+    end
+
+    for target, line in pairs(TrackerESP.Lines) do
+        if not frameActive[target] then
+            if line and line.Parent then line.Visible = false end
+            if not target or not target.Parent then
+                if line then line:Destroy() end
+                TrackerESP.Lines[target] = nil
+            end
+        end
+    end
+end)
 
 local Selling = {}
 
@@ -2469,7 +2692,8 @@ local function refreshPendingBoostedTarget()
 end
 
 function Farm.queueBoostedTarget(part)
-    if not part or not part.Parent or not part:IsDescendantOf(workspace) then
+    if not part or not part.Parent or not part:IsDescendantOf(workspace)
+        or ItemESP.isPlayerOwned(nil, part) then
         return false
     end
     if Farm.BoostedTargetQueued[part] or Farm.BoostedTargetSeen[part] then
@@ -2498,8 +2722,10 @@ function Farm.nextReadyBoostedTarget(exceptPart, now, consume)
         local part = entry and entry.Part
         local data = part and Tracked[part]
         local expired = not entry or currentClock - (entry.AddedAt or currentClock) > Farm.BoostedTargetQueueLifetime
+        local playerOwned = part and ItemESP.isPlayerOwned(nil, part)
         local disallowed = data and not Farm.allowed(data.Name)
-        if not part or not part.Parent or not part:IsDescendantOf(workspace) or expired or disallowed then
+        if not part or not part.Parent or not part:IsDescendantOf(workspace)
+            or expired or disallowed or playerOwned then
             if part then Farm.BoostedTargetQueued[part] = nil end
             table.remove(queue, index)
         end
@@ -2510,6 +2736,7 @@ function Farm.nextReadyBoostedTarget(exceptPart, now, consume)
         local data = part and Tracked[part]
         if part and part ~= exceptPart and data
             and Farm.allowed(data.Name)
+            and not ItemESP.isPlayerOwned(nil, part)
             and Utils.validPos(part) and not Utils.invisible(part)
             and (not data.FarmRetryAt or data.FarmRetryAt <= now) then
             if consume then
@@ -2575,6 +2802,7 @@ function Farm.nearest()
 
     for part, data in pairs(Tracked) do
         if part and part:IsDescendantOf(workspace) and Utils.validPos(part)
+            and not ItemESP.isPlayerOwned(data.Obj, part)
             and not Utils.invisible(part) and Farm.allowed(data.Name)
             and (not data.FarmRetryAt or data.FarmRetryAt <= now) then
             local distance = (part.Position - origin).Magnitude
@@ -3821,18 +4049,24 @@ function Loops.itemLabels()
                 for part, data in pairs(Tracked) do
                     if not part or not part:IsDescendantOf(workspace) then
                         ItemESP.unregister(part)
+                    elseif ItemESP.isPlayerOwned(data.Obj or part, part) then
+                        data.PlayerOwned = true
+                        local hl = part:FindFirstChild("Phantom_ESP")
+                        local bb = part:FindFirstChild("Phantom_Label")
+                        if hl then hl.Enabled = false end
+                        if bb then bb.Enabled = false end
                     elseif not Utils.validPos(part) then
                         ItemESP.unregister(part)
                         table.insert(Pending, {obj = data.Obj or part, part = part, name = data.Name})
                     elseif myPos then
+                        if data.PlayerOwned then
+                            data.PlayerOwned = false
+                            ItemESP.create(part, data.Name, State.ItemEsp)
+                        end
                         local bb = part:FindFirstChild("Phantom_Label")
                         local label = bb and bb:FindFirstChild("Phantom_Text")
                         if label then
-                            if Config.Esp.ShowItemDistance then
-                                label.Text = string.format("%s\n[%dm]", data.Name, math.floor((part.Position - myPos).Magnitude))
-                            else
-                                label.Text = tostring(data.Name)
-                            end
+                            label.Text = ItemESP.labelText(part, data.Name)
                             label.TextColor3 = Config.Esp.ItemNameColor
                             label.TextSize = math.clamp(math.floor(tonumber(Config.Esp.ItemTextSize) or 13), 8, 24)
                         end
@@ -6136,6 +6370,8 @@ local Halloween = {
     TurnInBusy = false,
     LastTurnInAt = 0,
     StatusLabel = nil,
+    PointsLabel = nil,
+    CachedJackPoints = nil,
 }
 
 local HALLOWEEN_CANDY_NAMES = {
@@ -6151,6 +6387,123 @@ function Halloween.countCandies()
         total += countInventoryName(candyName)
     end
     return total
+end
+
+-- Read Jack's confirmed balance directly from his visible dialogue.
+-- This avoids depending on a guessed game-side Value object name.
+function Halloween.captureJackPoints(gui)
+    if not gui or not gui.Parent then return false end
+    local ok, rawText = pcall(function()
+        return Gui.dialogueText(gui)
+    end)
+    if not ok or type(rawText) ~= "string" or rawText == "" then return false end
+
+    local text = string.lower(rawText):gsub(",", "")
+    local digits = text:match("you%s+now%s+have%s+(%d+)%s+points?")
+    if not digits then return false end
+
+    local points = tonumber(digits)
+    if not points then return false end
+    Halloween.CachedJackPoints = points
+    return true
+end
+
+-- Find the event points value without assuming one specific game-side name.
+-- Once Jack's dialogue confirms a balance, that value takes priority over unrelated stats.
+function Halloween.readJackPoints()
+    local aliases = {
+        jackpoints = 120,
+        halloweenpoints = 115,
+        candypoints = 110,
+        pumpkinpoints = 105,
+        eventpoints = 100,
+        trickortreatpoints = 98,
+        jackpoint = 95,
+        halloweenpoint = 94,
+        candypoint = 93,
+        pumpkinpoint = 92,
+        eventpoint = 91,
+        halloweencurrency = 85,
+        candycurrency = 84,
+        eventcurrency = 83,
+        jackcurrency = 82,
+        trickortreatcurrency = 80,
+        halloweentokens = 75,
+        candytokens = 74,
+        jacktokens = 73,
+    }
+
+    local function normalize(value)
+        return string.lower(tostring(value or "")):gsub("[^%w]", "")
+    end
+
+    local bestValue = Halloween.CachedJackPoints
+    local bestScore = bestValue ~= nil and 1000 or -1
+    local scanRoots = {LP}
+    for _, rootName in ipairs({"PlayerStats", "leaderstats", "Stats", "Data"}) do
+        local root = LP:FindFirstChild(rootName)
+        if root then table.insert(scanRoots, root) end
+    end
+
+    local seen = {}
+    for _, root in ipairs(scanRoots) do
+        if root and not seen[root] then
+            seen[root] = true
+            for _, obj in ipairs(root:GetDescendants()) do
+                if obj:IsA("ValueBase") then
+                    local key = normalize(obj.Name)
+                    local score = aliases[key]
+                    if not score and key:find("point", 1, true) then
+                        local ancestor = obj.Parent
+                        local eventContext = false
+                        while ancestor and ancestor ~= root do
+                            local contextName = normalize(ancestor.Name)
+                            if contextName:find("jack", 1, true)
+                                or contextName:find("halloween", 1, true)
+                                or contextName:find("candy", 1, true)
+                                or contextName:find("pumpkin", 1, true)
+                                or contextName:find("trickortreat", 1, true)
+                                or contextName:find("event", 1, true) then
+                                eventContext = true
+                                break
+                            end
+                            ancestor = ancestor.Parent
+                        end
+                        if eventContext then score = 70 end
+                    end
+                    if score and score > bestScore then
+                        bestScore = score
+                        bestValue = obj.Value
+                    end
+                end
+            end
+        end
+    end
+
+    -- Some games expose event counters as player attributes instead of Value objects.
+    for name, value in pairs(LP:GetAttributes()) do
+        local key = normalize(name)
+        local score = aliases[key]
+        if score and score > bestScore then
+            bestScore = score
+            bestValue = value
+        end
+    end
+
+    if bestValue == nil then bestValue = Halloween.CachedJackPoints end
+    if bestValue == nil then return nil end
+    local numeric = tonumber(bestValue)
+    if numeric then
+        local rounded = math.floor(numeric)
+        local formatted = tostring(rounded)
+        while true do
+            local replaced, count = formatted:gsub("^(%-?%d+)(%d%d%d)", "%1,%2")
+            formatted = replaced
+            if count == 0 then break end
+        end
+        return formatted
+    end
+    return tostring(bestValue)
 end
 
 local function halloweenNotify(title, message, notificationType)
@@ -6191,6 +6544,7 @@ local function turnInHalloweenCandies()
     Halloween.TurnInBusy = true
     State.HalloweenTurnInBusy = true
     local success = false
+    local openedDialogue = nil
     local failureReason = "Could not select the candy turn-in option."
 
     local ok, err = pcall(function()
@@ -6200,15 +6554,30 @@ local function turnInHalloweenCandies()
             failureReason = "Jack's dialogue did not open."
             return
         end
+        openedDialogue = dialogue
 
         if not Gui.waitAndClickOption("Option2", 5) then
             failureReason = "The second dialogue option was not available."
             return
         end
 
+        -- Wait for Jack's balance sentence to appear, and capture it before closing the dialogue.
+        local captureDeadline = tick() + 2.5
+        repeat
+            local responseDialogue = Gui.currentDialogue() or openedDialogue
+            if Halloween.captureJackPoints(responseDialogue) then break end
+            task.wait(0.1)
+        until tick() >= captureDeadline
+
         success = true
         Halloween.LastTurnInAt = tick()
     end)
+
+    if openedDialogue then
+        pcall(function()
+            Gui.forceCloseDialogue(3)
+        end)
+    end
 
     Halloween.TurnInBusy = false
     State.HalloweenTurnInBusy = false
@@ -6239,6 +6608,16 @@ HalloweenCollection:Toggle({
         end
         halloweenNotify("Halloween Event", State.HalloweenCandyFarm and "Candy-only collection enabled." or "Candy-only collection disabled.")
     end,
+})
+
+local HalloweenInfo = HalloweenTab:Section({Title = "Info", Side = "left"})
+Halloween.PointsLabel = HalloweenInfo:Paragraph({
+    Title = "Points from Jack",
+    Desc = "Checking your event points...",
+})
+Halloween.StatusLabel = HalloweenInfo:Paragraph({
+    Title = "Candy Inventory",
+    Desc = "Checking your candy...",
 })
 
 local HalloweenTurnInSection = HalloweenTab:Section({Title = "Candy Turn-In", Side = "right"})
@@ -6275,26 +6654,35 @@ HalloweenTurnInSection:Button({
         end)
     end,
 })
-Halloween.StatusLabel = HalloweenTurnInSection:Paragraph({
-    Title = "Candy Inventory",
-    Desc = "Checking your candy...",
-})
-
 task.spawn(function()
     local lastStatusUpdate = 0
     while true do
         task.wait(0.4)
 
+        -- Also watch for Jack's response when the dialogue is opened or advanced manually.
+        local activeDialogue = Gui.currentDialogue()
+        if activeDialogue then
+            Halloween.captureJackPoints(activeDialogue)
+        end
+
         local candyCount = Halloween.countCandies()
-        if Halloween.StatusLabel and tick() - lastStatusUpdate >= 0.8 then
+        if tick() - lastStatusUpdate >= 0.8 then
             lastStatusUpdate = tick()
-            pcall(function()
-                Halloween.StatusLabel:SetDesc(string.format(
-                    "%d / 45 candies in inventory. Auto turn-in threshold: %d.",
-                    candyCount,
-                    math.clamp(tonumber(Halloween.TurnInThreshold) or 20, 1, 45)
-                ))
-            end)
+            if Halloween.StatusLabel then
+                pcall(function()
+                    Halloween.StatusLabel:SetDesc(string.format(
+                        "%d / 45 candies in inventory. Auto turn-in threshold: %d.",
+                        candyCount,
+                        math.clamp(tonumber(Halloween.TurnInThreshold) or 20, 1, 45)
+                    ))
+                end)
+            end
+            if Halloween.PointsLabel then
+                pcall(function()
+                    local points = Halloween.readJackPoints()
+                    Halloween.PointsLabel:SetDesc(points and (points .. " points") or "Points value not found in player stats yet.")
+                end)
+            end
         end
 
         local threshold = math.clamp(math.floor(tonumber(Halloween.TurnInThreshold) or 20), 1, 45)
@@ -6591,6 +6979,26 @@ ItemControl:Toggle({
     end,
 })
 ItemControl:Toggle({
+    Title = "Item tracker",
+    Desc = "Draw a line from the screen edge to each world item.",
+    Icon = "route",
+    Value = State.ItemTracker,
+    Callback = function(state)
+        State.ItemTracker = state == true
+    end,
+})
+ItemControl:Dropdown({
+    Title = "Item tracker position",
+    Desc = "Start each item line from one fixed point at the top or bottom center.",
+    Values = {"Above", "Bottom"},
+    Value = Config.Esp.ItemTrackerPosition,
+    Callback = function(value)
+        if value == "Above" or value == "Bottom" then
+            Config.Esp.ItemTrackerPosition = value
+        end
+    end,
+})
+ItemControl:Toggle({
     Title = "Notify on item spawn",
     Desc = "Notify me when an item appears.",
     Icon = "bell-ring",
@@ -6690,6 +7098,26 @@ PlayerControl:Toggle({
             for _, plr in ipairs(Players:GetPlayers()) do
                 if plr ~= LP and plr.Character then PlayerESP.remove(plr.Character) end
             end
+        end
+    end,
+})
+PlayerControl:Toggle({
+    Title = "Player tracker",
+    Desc = "Draw a line from the screen edge to each other player.",
+    Icon = "route",
+    Value = State.PlayerTracker,
+    Callback = function(state)
+        State.PlayerTracker = state == true
+    end,
+})
+PlayerControl:Dropdown({
+    Title = "Player tracker position",
+    Desc = "Start each player line from one fixed point at the top or bottom center.",
+    Values = {"Above", "Bottom"},
+    Value = Config.Esp.PlayerTrackerPosition,
+    Callback = function(value)
+        if value == "Above" or value == "Bottom" then
+            Config.Esp.PlayerTrackerPosition = value
         end
     end,
 })
@@ -12522,7 +12950,7 @@ local function spawnedItemInfo(obj)
         name, part = obj.Name, obj
     end
 
-    if name and part then
+    if name and part and not ItemESP.isPlayerOwned(obj, part) then
         local target = part:FindFirstAncestorOfClass("Model") or part
         if _G.__PhantomViewerAddTarget then
             pcall(_G.__PhantomViewerAddTarget, target)
@@ -12535,6 +12963,7 @@ end
 local function setBoostedSpawnTarget(itemName, itemPart)
     if not State.Farm or not Config.Boosted or not itemName or not itemPart
         or not itemPart.Parent or not itemPart:IsDescendantOf(workspace)
+        or ItemESP.isPlayerOwned(nil, itemPart)
         or not Farm.allowed(itemName) then
         return
     end
