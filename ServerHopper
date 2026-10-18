@@ -40,11 +40,11 @@ end
         if count > 0 then source = patched end
     end
 
-    if not source:find("-- AF robust viewport pairing", 1, true) then
+    if not source:find("AF_ROBUST_VIEWPORT_PAIRING", 1, true) then
         local pairStart = source:find("local function viewerPair(a, b, list)", 1, true)
         local pairEnd = pairStart and source:find("local function wrapAngle", pairStart, true)
         if pairStart and pairEnd then
-            local pairPatch = [[-- AF robust viewport pairing
+            local pairPatch = [[local AF_ROBUST_VIEWPORT_PAIRING = true
 local function viewerPair(a, b, list)
     if not a or not b then return end
     if b:IsA("BasePart") then
@@ -79,10 +79,10 @@ end
         end
     end
 
-    if not source:find("-- AF safe viewport bounds", 1, true) then
+    if not source:find("AF_SAFE_VIEWPORT_BOUNDS", 1, true) then
         local boundsStart, boundsEnd = source:find("local cf, size = model:GetBoundingBox()", 1, true)
         if boundsStart and boundsEnd then
-            local boundsPatch = [[-- AF safe viewport bounds
+            local boundsPatch = [[local AF_SAFE_VIEWPORT_BOUNDS = true
 local cf, size
 local boundsOk = pcall(function() cf, size = model:GetBoundingBox() end)
 if (not boundsOk or not cf or not size) and src:IsA("Model") then
@@ -555,7 +555,6 @@ pcall(function()
     setreadonly(meta, true)
 end)
 
--- Unsupported executors run the fallback script only; the main Methion script stops here.
 if not bypassSupported then
     local fallbackOk, fallbackErr = pcall(function()
         local fallbackSource = game:HttpGet("https://pastebin.com/raw/c9xy3XzA")
@@ -571,15 +570,22 @@ if not bypassSupported then
     return
 end
 
+local savedFarmTeleportMode = MethionSH_Env.__MethionSHFarmTeleportMode
+local initialFarmTeleportMode = (savedFarmTeleportMode == "instant" or savedFarmTeleportMode == "tween") and savedFarmTeleportMode or (bypassSupported and "instant" or "tween")
+local savedReloadOnKick = MethionSH_Env.__MethionSHReloadOnKick
+local initialReloadOnKick = true
+if type(savedReloadOnKick) == "boolean" then initialReloadOnKick = savedReloadOnKick end
+local savedFarmOnlyItems = MethionSH_Env.__MethionSHFarmOnlyItems
+
 local Config = {
     TweenSpeed = 220,
     SafeZone = Vector3.new(-212.241150, -33.486183, -283.842651),
     AutoBuyLucky = false,
     LuckyArrowPrice = 75000,
     LuckyArrowItem = "1x Lucky Arrow",
-    FarmOnlyItems = {},
-    AutoRejoinEnabled = true,
-    FarmTeleportMode = bypassSupported and "instant" or "tween",
+    FarmOnlyItems = type(savedFarmOnlyItems) == "table" and savedFarmOnlyItems or {},
+    AutoRejoinEnabled = initialReloadOnKick,
+    FarmTeleportMode = initialFarmTeleportMode,
     InstantDelay = 0.35,
     Boosted = false,
     NotifyItemSpawn = true,
@@ -807,7 +813,6 @@ function Gui.dialogueSignature(gui)
     return table.concat(parts, "\30")
 end
 
-
 function Gui.dialogueText(gui)
     if not gui or not gui.Parent then return "" end
     local parts = {}
@@ -839,7 +844,6 @@ function Gui.skipClick()
     local viewport = camera.ViewportSize
     return Gui.clickAt(math.max(1, math.floor(viewport.X - 10)), 10)
 end
-
 
 function Gui.click(button)
     if not button or not button.Parent then return false end
@@ -974,7 +978,6 @@ function Gui.waitAndClickOption(name, timeout)
     return false
 end
 
-
 function Gui.advanceUntilClosed(timeout)
     local started = tick()
     local lastSkip = tick()
@@ -1042,7 +1045,6 @@ function Gui.forceCloseDialogue(timeout)
     end
     return Gui.currentDialogue() == nil
 end
-
 
 local ItemESP = {}
 
@@ -1196,9 +1198,6 @@ function ItemESP.unregister(part)
         Tracked[part] = nil
     end
 
-    -- Remove stale reverse mappings too. Without this, a part that temporarily
-    -- disappears/reappears can never be registered again because TrackedRev
-    -- would still claim it had already been processed.
     for object, mappedPart in pairs(TrackedRev) do
         if mappedPart == part then
             TrackedRev[object] = nil
@@ -1371,14 +1370,10 @@ function TrackerESP.updateLine(target, worldPosition, position, color, active, f
     local viewport = camera.ViewportSize
     if viewport.X <= 0 or viewport.Y <= 0 then return end
 
-    -- Anchor at the exact top/bottom edge, centered horizontally.
-    -- Bottom is flush with the very bottom of the viewport instead of floating above it.
     local isTop = string.lower(tostring(position or "Bottom")) == "above"
     local startPoint = Vector2.new(viewport.X * 0.5, isTop and 0 or (viewport.Y - 1))
     local targetPoint = Vector2.new(projected.X, projected.Y)
 
-    -- Do not track off-screen targets or targets behind the camera.
-    -- This intentionally avoids drawing a line to the screen edge for unseen items/players.
     local targetInside = projected.Z > 0
         and targetPoint.X >= 0 and targetPoint.X <= viewport.X
         and targetPoint.Y >= 0 and targetPoint.Y <= viewport.Y
@@ -1396,8 +1391,6 @@ function TrackerESP.updateLine(target, worldPosition, position, color, active, f
         return
     end
 
-    -- GuiObject rotation pivots around its center. Place the frame at the segment
-    -- midpoint so the line runs from the fixed screen-edge anchor to the target.
     line.AnchorPoint = Vector2.new(0.5, 0.5)
     line.Position = UDim2.fromOffset(
         (startPoint.X + targetPoint.X) * 0.5,
@@ -2091,8 +2084,7 @@ local Move = {}
 
 function Move.flyCF(cf, speed, shouldContinue)
     local requestedSpeed = tonumber(speed) or tonumber(Config.TweenSpeed) or 220
-    -- Use the Settings speed consistently at every distance. The configured speed
-    -- is the actual travel speed, regardless of target distance.
+
     speed = math.clamp(requestedSpeed, 10, 500)
 
     local targetCFrame = typeof(cf) == "Vector3" and CFrame.new(cf) or cf
@@ -2123,9 +2115,6 @@ function Move.flyCF(cf, speed, shouldContinue)
     anchor.CFrame = root.CFrame
     anchor.Parent = workspace
 
-    -- Keep the selected Settings speed constant for every travel distance.
-    -- Do NOT impose a minimum duration: that made short trips slower than the
-    -- configured speed. With Linear easing, duration = distance / speed.
     local duration = distance / speed
     local tween = TweenService:Create(
         anchor,
@@ -2191,8 +2180,7 @@ function Move.flySafe()
 end
 
 function Move.teleCF(cf)
-    -- Instant movement is unavailable unless the executor passed the bypass check.
-    -- Keep the action usable by falling back to Tween instead of direct movement.
+
     if not bypassSupported then
         return Move.flyCF(cf, Config.TweenSpeed)
     end
@@ -2407,8 +2395,7 @@ function FarmVisual.showSafeZoneDecoy()
         elseif descendant:IsA("BasePart") then
             pcall(function()
                 descendant.LocalTransparencyModifier = 0
-                -- Keep the root anchored and move the clone as a separate visual rig.
-                -- Its limbs remain jointed so mirrored animations can pose them.
+
                 descendant.Anchored = descendant == decoyRoot
                 descendant.CanCollide = false
                 descendant.CanTouch = false
@@ -2600,9 +2587,6 @@ function FarmVisual.showSafeZoneDecoy()
         end
     end
 
-    -- This local ghost has no collisions and its own anchored root. It follows
-    -- player input visually while the real character continues its own farm logic.
-    -- No CFrames, velocity, or movement state are written to the real character.
     FarmVisual.DecoyUpdateConnection = RunService.Heartbeat:Connect(function(deltaTime)
         if FarmVisual.Decoy ~= decoy or not decoy.Parent
             or FarmVisual.Character ~= character or LP.Character ~= character
@@ -2719,9 +2703,6 @@ function Farm.isActive()
         and _G.__MethionSHPreloading ~= true
 end
 
--- Event-driven target handoff for Boosted. Queue every spawn instead of keeping
--- only one target: several items can replicate in the same frame, and each item
--- may need a short moment for its part, position, transparency, and prompt to load.
 Farm.PendingBoostedTarget = nil
 Farm.PendingBoostedTargets = {}
 Farm.BoostedTargetQueued = setmetatable({}, {__mode = "k"})
@@ -2763,8 +2744,6 @@ function Farm.nextReadyBoostedTarget(exceptPart, now, consume)
     local queue = Farm.PendingBoostedTargets
     local currentClock = os.clock()
 
-    -- Drop targets that were removed or never finished replicating. Invalid or
-    -- invisible items are retained briefly instead of being discarded instantly.
     for index = #queue, 1, -1 do
         local entry = queue[index]
         local part = entry and entry.Part
@@ -2834,9 +2813,6 @@ function Farm.nearest()
     local priorityItem, priorityPart, priorityData, priorityDist = nil, nil, nil, math.huge
     local origin = root.Position
 
-    -- Prefer the oldest event-queued target that is actually ready. A target
-    -- whose position/transparency/prompt is still replicating stays queued, and
-    -- other ready spawns can still be selected rather than waiting behind it.
     if State.Farm and Config.Boosted then
         local pending, data = Farm.nextReadyBoostedTarget(nil, now, true)
         if pending and data then
@@ -2879,8 +2855,6 @@ function Farm.nearest()
         pcall(_G.__PhantomQuestFarmSetItemViewerTarget, chosenItem)
     end
 
-    -- Return the real tracked part and record as well as the containing model.
-    -- The model is retained as the first return value for existing callers.
     return chosenItem, chosenPart, chosenData
 end
 
@@ -2899,8 +2873,6 @@ function Farm.waitForArrival(part, timeout)
         local root = character:FindFirstChild("HumanoidRootPart")
         if not root then return false end
 
-        -- Hold the root at the actual arrival point. No-clip physics can start
-        -- pulling the character downward on the very next frame after a teleport.
         local targetPosition = part.Position + Vector3.new(0, 3, 0)
         if (root.Position - targetPosition).Magnitude > 0.1 then
             root.CFrame = CFrame.new(targetPosition)
@@ -2917,9 +2889,6 @@ function Farm.waitForArrival(part, timeout)
         end
         previousPosition = currentPosition
 
-        -- Five steady frames prove the root has reached the target. Then hold
-        -- it there for the configured dwell so the character fully settles and
-        -- the game's position/prompt state has time to catch up before pickup.
         if stableFrames >= 5 then
             local settleUntil = os.clock() + settleTime
             while Farm.isActive() and part and part.Parent and part:IsDescendantOf(workspace)
@@ -2982,7 +2951,6 @@ function Farm.triggerPickupPrompt(prompt)
         end
     end
 
-    -- Supported executors keep Methion's existing instant prompt trigger.
     if bypassSupported and type(fireproximityprompt) == "function" then
         local ok = pcall(function()
             fireproximityprompt(prompt, 0, true)
@@ -2994,8 +2962,6 @@ function Farm.triggerPickupPrompt(prompt)
         if ok then return true end
     end
 
-    -- Unsupported-executor fallback copied from the other Methion's custom
-    -- prompt trigger: fire the local Triggered connections when available.
     local fired = false
     if type(getconnections) == "function" then
         local connectionsOk, connections = pcall(function()
@@ -3013,8 +2979,6 @@ function Farm.triggerPickupPrompt(prompt)
         end
     end
 
-    -- If no usable connection was fired, use the prompt's hold-input methods.
-    -- HoldDuration is temporarily zero so this behaves as an instant interaction.
     if not fired and prompt.Parent then
         local inputOk = pcall(function()
             prompt:InputHoldBegin()
@@ -3040,7 +3004,7 @@ function Farm.pickup(model, part)
     local char = LP.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return false end
-    -- Keep the character close enough that the server can validate the prompt.
+    
     if (part.Position - root.Position).Magnitude > 4.25 then return false end
     return Farm.triggerPickupPrompt(prompt)
 end
@@ -3198,8 +3162,6 @@ function Farm.pickupBoosted(model, part, trackedData)
         Move.telePart(part)
     end
 
-    -- Continue tracking while the target is present. The longer timeout is only
-    -- a retry window: a new ready spawn interrupts immediately through the queue.
     while State.Farm and Config.Boosted and LP.Character == expectedCharacter
         and os.clock() - startedAt < 4.0 do
         if itemRemoved() then
@@ -3220,9 +3182,6 @@ function Farm.pickupBoosted(model, part, trackedData)
             local nowInvisible = os.clock()
             invisibleSince = invisibleSince or nowInvisible
 
-            -- Only treat an item becoming invisible as a completed pickup after a
-            -- prompt activation actually succeeded. Spawn-time invisibility is
-            -- tolerated while replication finishes, instead of dropping the item.
             if lastSuccessfulTriggerAt and nowInvisible - lastSuccessfulTriggerAt >= 0.15
                 and nowInvisible - invisibleSince >= 0.12 then
                 ItemESP.unregister(part)
@@ -3266,8 +3225,7 @@ function Farm.pickupBoosted(model, part, trackedData)
                             promptInFlight = true
                             lastPromptAt = now
                             task.spawn(function()
-                                -- The user-requested 0.25-second delay remains in
-                                -- place while the outer Heartbeat loop keeps locking.
+
                                 task.wait(0.27)
                                 local callbackOk, callbackErr = pcall(function()
                                     local currentPromptAnchor = promptAnchor(prompt)
@@ -3361,9 +3319,7 @@ function Farm.pickupTween(model, part, trackedData)
     end
 
     if not bypassSupported then
-        -- Unsupported executors use the custom collector from the other Methion:
-        -- stay at the item and repeatedly trigger it instead of relying on the
-        -- executor-only fireproximityprompt primitive.
+
         local expectedCharacter = LP.Character
         local started = tick()
         local lastPromptAt = 0
@@ -3402,7 +3358,6 @@ function Farm.pickupTween(model, part, trackedData)
         return false
     end
 
-    -- Supported executors keep the current instant prompt API and retry loop.
     for attempt = 1, 3 do
         if not part.Parent or not part:IsDescendantOf(workspace) then
             ItemESP.unregister(part)
@@ -3423,7 +3378,6 @@ function Farm.pickupTween(model, part, trackedData)
             local distance = (referencePart.Position - root.Position).Magnitude
             local maxDistance = tonumber(prompt.MaxActivationDistance) or 10
 
-            -- Re-center and settle if the item moved while we were approaching it.
             if distance > math.max(maxDistance, 6) then
                 root.CFrame = CFrame.new(part.Position + Vector3.new(0, 3, 0))
                 root.AssemblyLinearVelocity = Vector3.zero
@@ -3458,9 +3412,6 @@ end
 function Farm.tick()
     if State.HalloweenTurnInBusy then return end
 
-    -- Selling uses LP.Character and the real inventory. Keep any existing
-    -- visual decoy and its camera until the sell transaction fully finishes,
-    -- even if Auto Farm is toggled off during the transaction.
     if State.Selling then
         if Farm.isActive() and bypassSupported and Config.FarmTeleportMode == "instant" and not FarmVisual.isActive() then
             FarmVisual.showSafeZoneDecoy()
@@ -3491,9 +3442,7 @@ function Farm.tick()
 
     local item, trackedPart, trackedData = Farm.nearest()
     if item then
-        -- Boosted must use the exact tracked item part from the spawn/ESP record.
-        -- Picking the first BasePart inside a Model can lock onto an unrelated limb
-        -- or decorative part and make proximity verification fail intermittently.
+
         local part = Config.Boosted and trackedPart and trackedPart.Parent
             and trackedPart:IsDescendantOf(workspace) and trackedPart
             or (item:IsA("BasePart") and item or item:FindFirstChildWhichIsA("BasePart", true))
@@ -3520,8 +3469,7 @@ function Farm.tick()
                 moveToSafeIfNeeded()
             end
         else
-            -- Tween mode travels to the exact tracked part, not an arbitrary
-            -- BasePart discovered inside its containing model.
+
             local targetPart = trackedPart and trackedPart.Parent and trackedPart:IsDescendantOf(workspace)
                 and trackedPart or part
             if targetPart then
@@ -3548,8 +3496,7 @@ function Farm.tick()
                 end
                 task.wait(0.1)
             else
-                -- Roam while no valid target part is available. A spawn interrupts
-                -- the roam so the next farm pass can approach it instead.
+
                 local roamPos = Vector3.new(math.random(-560, 560), 100, math.random(-600, 580))
                 Move.flyCF(CFrame.new(roamPos), Config.TweenSpeed, function()
                     return Farm.isActive() and Farm.nearest() == nil
@@ -3561,7 +3508,7 @@ function Farm.tick()
         if instantMode then
             moveToSafeIfNeeded()
         else
-            -- Roaming replaces repeatedly flying to the same fixed safe-zone point.
+            
             local roamPos = Vector3.new(math.random(-560, 560), 100, math.random(-600, 580))
             Move.flyCF(CFrame.new(roamPos), Config.TweenSpeed, function()
                 return Farm.isActive() and Farm.nearest() == nil
@@ -3712,15 +3659,17 @@ function Rejoin.start()
             if not message or message == "" then return end
             task.spawn(function()
                 task.wait(0.35)
+                local reloadHandler = _G.__MethionSHReloadAfterKick
+                if type(reloadHandler) == "function" then
+                    local ok, reloading = pcall(reloadHandler)
+                    if ok and reloading then return end
+                end
                 local controller = _G.__MethionSHController
                 if controller and controller.Enabled and type(controller.hop) == "function" then
-                    -- AFK server-hop mode: queue the script and try a different public server.
                     local ok, hopped = pcall(function() return controller:hop() end)
                     if ok and hopped then return end
                 end
-                pcall(function()
-                    TeleportService:Teleport(game.PlaceId, LP)
-                end)
+                pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
             end)
         end)
     end)
@@ -3988,9 +3937,6 @@ function Cam.maintainCamera()
     end
     if not subject or not subject.Parent then return end
 
-    -- Use the same standard Roblox camera controller as Auto Storyline.
-    -- Keep the subject pinned around the normal camera update without writing CFrame,
-    -- so the player can still rotate the camera normally with the mouse or touch.
     pcall(function()
         if cam.CameraType ~= Enum.CameraType.Custom then
             cam.CameraType = Enum.CameraType.Custom
@@ -4082,8 +4028,7 @@ function Loops.farm()
     task.spawn(function()
         while true do
             if Farm.isActive() and bypassSupported and Config.FarmTeleportMode == "instant" then
-                -- Instant mode already yields while teleporting/picking up, so use
-                -- a frame-sized idle yield instead of adding another 0.1 seconds.
+
                 Farm.tick()
                 task.wait()
             else
@@ -4226,8 +4171,7 @@ function Loops.spectate()
                 elseif not Cam.Active or Cam.Target ~= target then
                     Cam.start(target)
                 else
-                    -- Keep spectating this exact player through respawns. Cam temporarily
-                    -- uses our own Humanoid if their character is between spawn states.
+
                     Cam.maintainCamera()
                 end
             elseif Cam.Active then
@@ -4492,8 +4436,6 @@ local LocalPlayer = Players.LocalPlayer
 
 local function enterGame()
     local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-
-    -- Restore the HUD if the game has not created it yet.
     pcall(function()
         if not playerGui:FindFirstChild("HUD") then
             local objects = ReplicatedStorage:FindFirstChild("Objects")
@@ -4503,16 +4445,12 @@ local function enterGame()
             end
         end
     end)
-
-    -- Request the Play action.
     local character = LocalPlayer.Character
         or LocalPlayer.CharacterAdded:Wait()
     local remote = character:WaitForChild("RemoteEvent", 15)
     if remote and remote:IsA("RemoteEvent") then
         remote:FireServer("PressedPlay")
     end
-
-    -- Remove loading overlays.
     for _, name in ipairs({
         "LoadingScreen1",
         "LoadingScreen"
@@ -4522,17 +4460,11 @@ local function enterGame()
             screen:Destroy()
         end
     end
-
-    -- Set the loading attribute.
     LocalPlayer:SetAttribute("LOADED", "Skip")
-
-    -- Remove depth of field.
     local depthOfField = Lighting:FindFirstChild("DepthOfField")
     if depthOfField then
         depthOfField:Destroy()
     end
-
-    -- Remove the loading song.
     local loadingScreen = workspace:FindFirstChild("LoadingScreen")
     if loadingScreen then
         local song = loadingScreen:FindFirstChild("Song")
@@ -4541,8 +4473,6 @@ local function enterGame()
         end
     end
 end
-
--- Repeat automatically.
 while true do
     local ok, err = pcall(enterGame)
     if not ok then
@@ -4601,8 +4531,7 @@ local function getPublicServerCandidate()
     until not cursor or pages >= 3 or #candidates >= 80
 
     if #candidates == 0 then
-        -- If we've visited all servers returned on the first pages, allow a repeat
-        -- but still never select the current instance.
+
         cursor = nil
         local url = string.format(
             "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
@@ -4626,13 +4555,13 @@ local function getPublicServerCandidate()
     end
 
     if #candidates == 0 then return nil end
-    -- Prefer lower-population servers; randomize within the quietest group.
+    
     table.sort(candidates, function(a, b) return a.playing < b.playing end)
     local topCount = math.min(12, #candidates)
     return candidates[math.random(1, topCount)]
 end
 
-local function queueNextRun(url)
+local function queueNextRun(url, autoStart)
     local queueFunction = MethionSH_Env.queue_on_teleport or MethionSH_Env.queueonteleport
     if type(queueFunction) ~= "function" and type(MethionSH_Env.syn) == "table" then
         queueFunction = MethionSH_Env.syn.queue_on_teleport
@@ -4642,26 +4571,68 @@ local function queueNextRun(url)
         return false
     end
 
+    local mode = Config.FarmTeleportMode == "tween" and "tween" or "instant"
+    local filterJson = HttpService:JSONEncode(Config.FarmOnlyItems or {})
     local visitedJson = HttpService:JSONEncode(SHController.VisitedJobs)
     local queueSource = table.concat({
         "repeat task.wait() until game:IsLoaded()",
         "local env = type(getgenv) == \"function\" and getgenv() or _G",
-        "env.__MethionSHAutoStart = true",
         "local http = game:GetService(\"HttpService\")",
+        "local mode = " .. string.format("%q", mode),
+        "env.__MethionSHFarmTeleportMode = mode",
+        "local filterOk, filter = pcall(function() return http:JSONDecode(" .. string.format("%q", filterJson) .. ") end)",
+        "if filterOk and type(filter) == \"table\" then env.__MethionSHFarmOnlyItems = filter end",
+        "env.__MethionSHReloadOnKick = " .. tostring(Config.AutoRejoinEnabled == true),
+        "env.__MethionSHAutoStart = " .. tostring(autoStart == true),
         "env.__MethionSHVisitedJobs = http:JSONDecode(" .. string.format("%q", visitedJson) .. ")",
-        "task.spawn(function()",
-        ENTER_GAME_SOURCE,
-        "end)",
         "local Players = game:GetService(\"Players\")",
+        "local ReplicatedStorage = game:GetService(\"ReplicatedStorage\")",
+        "local Lighting = game:GetService(\"Lighting\")",
+        "local TeleportService = game:GetService(\"TeleportService\")",
         "local player = Players.LocalPlayer",
-        "local character, humanoid, root",
+        "local function enterGame()",
+        "    local playerGui = player:WaitForChild(\"PlayerGui\")",
+        "    pcall(function() if not playerGui:FindFirstChild(\"HUD\") then local objects = ReplicatedStorage:FindFirstChild(\"Objects\"); local template = objects and objects:FindFirstChild(\"HUD\"); if template then template:Clone().Parent = playerGui end end end)",
+        "    local character = player.Character or player.CharacterAdded:Wait()",
+        "    local remote = character:WaitForChild(\"RemoteEvent\", 15)",
+        "    if remote and remote:IsA(\"RemoteEvent\") then remote:FireServer(\"PressedPlay\") end",
+        "    for _, name in ipairs({\"LoadingScreen1\", \"LoadingScreen\"}) do local screen = playerGui:FindFirstChild(name); if screen then screen:Destroy() end end",
+        "    player:SetAttribute(\"LOADED\", \"Skip\")",
+        "    local dof = Lighting:FindFirstChild(\"DepthOfField\"); if dof then dof:Destroy() end",
+        "    local loading = workspace:FindFirstChild(\"LoadingScreen\"); local song = loading and loading:FindFirstChild(\"Song\"); if song then song:Destroy() end",
+        "end",
+        "task.spawn(function() while true do pcall(enterGame); task.wait(3) end end)",
+        "local deadline = os.clock() + 10",
+        "local entered = false",
         "repeat",
         "    task.wait(0.1)",
-        "    character = player.Character",
-        "    humanoid = character and character:FindFirstChildOfClass(\"Humanoid\")",
-        "    root = character and character:FindFirstChild(\"HumanoidRootPart\")",
-        "until character and character.Parent and humanoid and humanoid.Health > 0 and root and player:GetAttribute(\"LOADED\") == \"Skip\"",
-        "task.wait(0.5)",
+        "    local character = player.Character",
+        "    local humanoid = character and character:FindFirstChildOfClass(\"Humanoid\")",
+        "    local root = character and character:FindFirstChild(\"HumanoidRootPart\")",
+        "    entered = character ~= nil and character.Parent ~= nil and humanoid ~= nil and humanoid.Health > 0 and root ~= nil and player:GetAttribute(\"LOADED\") == \"Skip\"",
+        "until entered or os.clock() >= deadline",
+        "if not entered then",
+        "    local queueFn = env.queue_on_teleport or env.queueonteleport",
+        "    if type(queueFn) ~= \"function\" and type(env.syn) == \"table\" then queueFn = env.syn.queue_on_teleport end",
+        "    local retrySource = env.__MethionSHRecoverySource",
+        "    if type(queueFn) == \"function\" and type(retrySource) == \"string\" then pcall(queueFn, retrySource) end",
+        "    local targetId = nil",
+        "    local ok, response = pcall(function() return game:HttpGet(\"https://games.roblox.com/v1/games/\" .. tostring(game.PlaceId) .. \"/servers/Public?sortOrder=Asc&limit=100\") end)",
+        "    if ok and type(response) == \"string\" then",
+        "        local decodedOk, payload = pcall(function() return http:JSONDecode(response) end)",
+        "        if decodedOk and type(payload) == \"table\" and type(payload.data) == \"table\" then",
+        "            local candidates = {}",
+        "            for _, server in ipairs(payload.data) do local id = server.id; local playing = tonumber(server.playing) or math.huge; local maximum = tonumber(server.maxPlayers) or 0; if type(id) == \"string\" and id ~= \"\" and id ~= game.JobId and maximum > 0 and playing < maximum then table.insert(candidates, {id = id, playing = playing}) end end",
+        "            table.sort(candidates, function(a, b) return a.playing < b.playing end)",
+        "            if candidates[1] then targetId = candidates[1].id end",
+        "        end",
+        "    end",
+        "    local hopOk = false",
+        "    if targetId then hopOk = pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, targetId, player) end) end",
+        "    if not hopOk then pcall(function() TeleportService:Teleport(game.PlaceId, player) end) end",
+        "    return",
+        "end",
+        "task.wait(0.35)",
         "local source = game:HttpGet(" .. string.format("%q", url) .. ")",
         "assert(type(source) == \"string\" and #source > 0, \"MethionSH source is empty\")",
         "local chunk, err = loadstring(source)",
@@ -4669,6 +4640,7 @@ local function queueNextRun(url)
         "chunk()",
         "",
     }, "\n")
+    MethionSH_Env.__MethionSHRecoverySource = queueSource
     local ok, err = pcall(queueFunction, queueSource)
     if not ok then
         warn("[MethionSH] Could not queue the next run: " .. tostring(err))
@@ -4700,7 +4672,7 @@ function SHController:hop()
         warn("[MethionSH] No different public server was found. Retrying soon.")
         return false
     end
-    if not queueNextRun(url) then return false end
+    if not queueNextRun(url, true) then return false end
 
     local ok, err = pcall(function()
         TeleportService:TeleportToPlaceInstance(game.PlaceId, target.id, LP)
@@ -4710,6 +4682,15 @@ function SHController:hop()
         return false
     end
     return true
+end
+
+_G.__MethionSHReloadAfterKick = function()
+    local url = resolvedMethionSHUrl()
+    if not url then return false end
+    local shouldResumeFarm = SHController.Enabled or State.Farm == true
+    if not queueNextRun(url, shouldResumeFarm) then return false end
+    local ok = pcall(function() TeleportService:Teleport(game.PlaceId, LP) end)
+    return ok
 end
 
 function SHController:stop()
@@ -4761,19 +4742,13 @@ function SHController:start()
             State.NoClip = false
             return
         end
-        Config.FarmTeleportMode = "instant"
-        Config.FarmOnlyItems = {"All items"}
-
-        -- Scan once after the character and bypass are ready, then start farming
-        -- immediately. Do not hold Farm.isActive behind the old five-second preload.
         ItemESP.scan()
         if not self.Enabled or self.Token ~= myToken then return end
         _G.__MethionSHPreloading = false
         State.Farm = true
         local sawItems = countFarmableItems() > 0
         local emptySince = nil
-        -- Event-driven tracking handles normal spawns. Keep a slower safety scan
-        -- for items that existed before the event hook or were missed on load.
+
         local nextScan = os.clock() + 12.0
         local runStarted = os.clock()
 
@@ -4799,7 +4774,6 @@ function SHController:start()
 
         if not self.Enabled or self.Token ~= myToken then return end
 
-        -- Stop movement, finish any active sale, then queue the next server run.
         _G.__MethionSHPreloading = false
         State.Farm = false
         State.NoClip = false
@@ -4858,7 +4832,7 @@ pcall(function()
 end)
 
 local function setupAutoPrestige(parentTab)
-    -- Shared state lives in _G so repeated loads can find and stop the same runner.
+    
     _G.MethionAutoPrestige = _G.MethionAutoPrestige or {}
     local AP = _G.MethionAutoPrestige
     AP.Enabled = false
@@ -5117,9 +5091,6 @@ local function setupAutoPrestige(parentTab)
         return nil
     end
 
-    -- Combat-lockout dialogue is an instruction from the game, not a real
-    -- storyline choice. Wait ten seconds without clicking any option, dismiss
-    -- the warning if possible, and leave the caller on the same checkpoint.
     local function pauseForCombatDialogue(gui)
         if not Gui.hasCombatDialogueWarning(gui) then return false end
         AP.CombatDialogueDeferred = true
@@ -5138,8 +5109,6 @@ local function setupAutoPrestige(parentTab)
         if not AP.Enabled then return true end
         AP.CombatDialoguePauseUntil = 0
 
-        -- Never select Option1 on the warning itself. Use the non-option dialogue
-        -- area to dismiss it so the next pass can request the same NPC dialogue.
         for _ = 1, 3 do
             local current = Gui.currentDialogue()
             if not current or not Gui.hasCombatDialogueWarning(current) then break end
@@ -5149,8 +5118,6 @@ local function setupAutoPrestige(parentTab)
         return true
     end
 
-    -- Open dialogues the same way as the working merchant flow, then advance
-    -- the actual DialogueGui. Use visible UI actions to advance it.
     local function openAutoDialogue(npcName, dialogueName, forceReplace)
         if State.Selling then return false end
         local remote = autoRemoteEvent()
@@ -5177,9 +5144,7 @@ local function setupAutoPrestige(parentTab)
         local dialogueRoot = ReplicatedStorage:FindFirstChild("Dialogue")
         local target = nil
         if dialogueRoot then
-            -- Prefer the requested NPC's own dialogue tree. A global recursive
-            -- search for a name such as "Dialogue4" can return another NPC's
-            -- dialogue, which breaks the final William Zeppeli vampire handoff.
+
             local speakerNode = nil
             if type(npcName) == "string" and npcName ~= "" then
                 speakerNode = dialogueRoot:FindFirstChild(npcName)
@@ -5197,8 +5162,6 @@ local function setupAutoPrestige(parentTab)
                 if not target then target = speakerNode end
             end
 
-            -- Keep compatibility with the game's shared/mapped dialogue layout
-            -- when no dialogue node exists under the requested speaker.
             if not target and type(dialogueName) == "string" then
                 target = dialogueRoot:FindFirstChild(dialogueName, true)
             end
@@ -5231,9 +5194,7 @@ local function setupAutoPrestige(parentTab)
         local nextActionAt = tick() + 0.22
         local sawDialogue = false
         local clickedAny = false
-        -- Storyline #7 is a five-choice chain. Preserve its current option across
-        -- retries; a local-only index restarted at Option1 every time the GUI
-        -- failed to close, so the sweep could never advance to Storyline #8.
+
         local sequenceIndex = optionSequence and math.clamp(
             math.floor(tonumber(AP.StorylineStep11OptionIndex) or 1),
             1,
@@ -5274,21 +5235,17 @@ local function setupAutoPrestige(parentTab)
                 end
 
                 if tick() >= nextActionAt then
-                    -- Fixed sequences (for example Storyline #7) must use the exact
-                    -- requested option. Never silently substitute a different choice.
+
                     local clicked = false
                     local signatureBeforeClick = optionSequence and signature(gui) or nil
                     if optionSequence and sequenceIndex > #optionSequence then
-                        -- The final choice has already been made. Dismiss any remaining
-                        -- dialogue panel without selecting an extra storyline option.
+
                         clicked = Gui.skipClick()
                     else
                         local desiredOption = optionSequence and optionSequence[sequenceIndex]
                             or (type(optionName) == "string" and optionName or "Option1")
                         local target = Gui.option(gui, desiredOption)
 
-                        -- Keep the previous fallback for ordinary dialogues, but not for
-                        -- an explicit option sequence where picking the wrong choice is bad.
                         if not optionSequence and not (target and target.Parent and Gui.isVisible(target)) then
                             target = nil
                             local options = gui:FindFirstChild("Frame")
@@ -5332,12 +5289,10 @@ local function setupAutoPrestige(parentTab)
         end
 
         if optionSequence then
-            -- Once every requested choice was actually clicked, a lingering client-side
-            -- dialogue panel must not pin the storyline cursor on step 11 forever.
+
             return sawDialogue and sequenceIndex > #optionSequence
         end
-        -- A dialogue is not complete just because a button was clicked. It must
-        -- actually close before the sweep moves on to the next storyline step.
+
         return sawDialogue and Gui.currentDialogue() == nil
     end
 
@@ -5351,9 +5306,6 @@ local function setupAutoPrestige(parentTab)
             return false
         end
 
-        -- If all five #7 choices were sent but the old panel stayed open, request
-        -- the next mapped dialogue explicitly. Never feed Storyline #8's Option1
-        -- into the still-open Storyline #7 panel.
         local replacingCompletedStep11 = not optionSequence
             and tonumber(AP.StorylineStep11OptionIndex or 1) > 5
         if optionSequence and AP.StorylineStep11OptionIndex > #optionSequence and not gui then
@@ -5493,8 +5445,6 @@ local function setupAutoPrestige(parentTab)
         return true
     end
 
-    -- Keep storyline recovery state in the shared _G-backed Auto Prestige state.
-    -- Version 2 adds a forced sweep for unknown locations when Auto Prestige is enabled.
     if AP.StorylineCursorVersion ~= 2 then
         AP.StorylineCursor = 1
         AP.StorylineCursorVersion = 2
@@ -5510,9 +5460,7 @@ local function setupAutoPrestige(parentTab)
     if AP.StorylineCheckpointKnown == nil then AP.StorylineCheckpointKnown = false end
 
     local function delayVampFarmUntilStorylineEnd()
-        -- An active vampire quest must never bypass discovery. It is ignored
-        -- until all 18 mapped storyline entries have been checked and any
-        -- storyline combat quest found during that sweep has been handled.
+
         local cursor = math.floor(tonumber(AP.StorylineCursor) or 1)
         return AP.Mode == "Vamp Farm"
             and AP.VampFarmModeRequested == true
@@ -5520,17 +5468,13 @@ local function setupAutoPrestige(parentTab)
     end
 
     local function currentAutoProgressQuest()
-        -- Only pause the storyline sweep for quests that require the combat
-        -- loop below. Dialogue/collection/talk-to-NPC steps are not combat
-        -- checkpoints; they must be allowed to advance to the next dialogue.
+
         local quests = autoQuests()
         for _, entry in ipairs(STORY_NPCS) do
             if quests[entry.quest] then return entry.quest end
         end
         if quests[VAMPIRE_QUEST] then
-            -- An existing vampire quest is unrelated to ordinary Auto Storyline.
-            -- Only handle it when the user explicitly selected Vamp Farm, and
-            -- only after the full 18-step sweep has been confirmed complete.
+
             if AP.Mode ~= "Vamp Farm" or AP.VampFarmModeRequested ~= true then
                 return nil
             end
@@ -5591,8 +5535,6 @@ local function setupAutoPrestige(parentTab)
             local interacted = fireDialogue("Storyline " .. STORY_KEYS[i], STORY_DIALOGUES[i], choices)
             task.wait(0.1)
 
-            -- During a recovery sweep, retry once before assuming this dialogue
-            -- is already completed or unavailable at the player's current stage.
             if not interacted and not AP.CombatDialogueDeferred
                 and AP.StorylineForceRecoverySweep and AP.Enabled and not STORY_OPTION_SEQUENCES[i] then
                 task.wait(0.2)
@@ -5661,8 +5603,7 @@ local function setupAutoPrestige(parentTab)
             local questName = currentAutoProgressQuest()
             if questName then
                 if questName == VAMPIRE_QUEST then
-                    -- Vamp Farm marks the storyline as complete. Do not overwrite
-                    -- its completed cursor with the dialogue step that detected it.
+
                     return true, true
                 end
                 saveStorylineCheckpoint(i + 1, i, questName)
@@ -5671,10 +5612,6 @@ local function setupAutoPrestige(parentTab)
                 return true, true
             end
 
-            -- A fixed-choice dialogue may already be cleared or unavailable. If
-            -- it failed to open and no dialogue panel exists, advance once rather
-            -- than pinning Auto Storyline on Storyline #7 forever. An open panel is
-            -- still handled by the sequence logic above and is never blindly skipped.
             if STORY_OPTION_SEQUENCES[i] and not interacted and not Gui.currentDialogue() then
                 if i == 11 and AP.Mode == "Vamp Farm" and AP.VampFarmModeRequested == true then
                     AP.VampFarmStep11Reached = true
@@ -5688,8 +5625,6 @@ local function setupAutoPrestige(parentTab)
                 continue
             end
 
-            -- Never skip a fixed multi-choice step when its exact option chain
-            -- failed during a normal storyline run. Keep the cursor on that step.
             if not interacted and requireThisStep then
                 saveStorylineCheckpoint(i, nil, nil)
                 setStatus("Vamp Farm paused at step " .. tostring(i) .. ". Waiting for this dialogue.")
@@ -5707,9 +5642,7 @@ local function setupAutoPrestige(parentTab)
                 if i == 11 then
                     AP.StorylineStep11FailureCount = (tonumber(AP.StorylineStep11FailureCount) or 0) + 1
                     if AP.StorylineStep11FailureCount >= 2 then
-                        -- Bounded escape hatch: after repeated failed attempts, stop
-                        -- reusing the stuck #7 panel and force the next mapped dialogue
-                        -- to open fresh on the next pass.
+
                         AP.StorylineStep11OptionIndex = #STORY_OPTION_SEQUENCES[i] + 1
                         if AP.Mode == "Vamp Farm" and AP.VampFarmModeRequested == true then
                             AP.VampFarmStep11Reached = true
@@ -5727,30 +5660,20 @@ local function setupAutoPrestige(parentTab)
                 return false, false
             end
 
-            -- If the dialogue window is still open, this conversation has not
-            -- finished yet. Stay on the same cursor and continue advancing it on
-            -- the next pass instead of opening/typing into the wrong dialogue.
             if not interacted and Gui.currentDialogue() then
                 saveStorylineCheckpoint(i, nil, nil)
                 setStatus("Finishing Storyline " .. STORY_KEYS[i] .. " before continuing.")
                 return false, false
             end
 
-            -- No combat quest was assigned. This is often an intermediate
-            -- storyline step (for example, talk to the next Storyline NPC),
-            -- so preserve the next index and continue the sweep.
             if interacted then
                 saveStorylineCheckpoint(i + 1, i, nil)
             elseif AP.StorylineForceRecoverySweep and AP.Enabled then
-                -- In recovery mode, a dialogue that remains unavailable after
-                -- retrying may belong to an already-cleared stage. Keep scanning
-                -- instead of getting stuck at an unknown old checkpoint.
+
                 saveStorylineCheckpoint(i + 1, i, nil)
                 setStatus("Checking Storyline " .. STORY_KEYS[i])
             else
-                -- This mapped dialogue is unavailable/already passed at the saved
-                -- checkpoint. Skip it and continue FORWARD instead of retrying it
-                -- forever and eventually resetting the whole storyline to #1.
+
                 saveStorylineCheckpoint(i + 1, i, nil)
                 setStatus("Skipping unavailable Storyline " .. STORY_KEYS[i] .. ". Moving on.")
             end
@@ -5775,10 +5698,6 @@ local function setupAutoPrestige(parentTab)
             if not completed or not AP.Enabled then return false end
         end
 
-        -- A known checkpoint must continue forward. Wrapping into the earlier
-        -- dialogue entries after every completed quest replays the whole storyline.
-        -- Only do a one-time wrap when an explicit recovery sweep was requested
-        -- because the current checkpoint is unknown/stale.
         if startIndex > 1
             and AP.StorylineForceRecoverySweep
             and not AP.StorylineRecoveryUsed
@@ -5796,10 +5715,6 @@ local function setupAutoPrestige(parentTab)
         if syncStorylineDropdown then syncStorylineDropdown() end
         if updateStorylineProgress then updateStorylineProgress() end
 
-        -- The cursor reaching step 19 is not enough by itself. First make sure
-        -- the completed sweep did not just reveal a storyline combat quest.
-        -- Keep Vamp Farm deferred while that quest is handled, then re-enter this
-        -- completion check without replaying steps 1-18.
         local finalQuests = autoQuests()
         for _, entry in ipairs(STORY_NPCS) do
             if finalQuests[entry.quest] then
@@ -5809,11 +5724,6 @@ local function setupAutoPrestige(parentTab)
             end
         end
 
-        -- The complete 1-18 scan is the automatic handoff point. Promote the
-        -- normal first-toggle sweep into Vamp Farm here, even when the user did
-        -- not manually choose Vamp Farm in the dropdown before starting.
-        -- Keep VampFarmActive false until the vampire quest is actually found;
-        -- progressStory() will now run the persistent step-19 quest handoff.
         AP.VampFarmFullSweepCompleted = true
         AP.Mode = "Vamp Farm"
         AP.VampFarmModeRequested = true
@@ -5834,8 +5744,7 @@ local function setupAutoPrestige(parentTab)
             markVampFarm("Full 18-step storyline sweep completed; existing vampire quest retained")
             return true
         end
-        -- Stay at step 19 from this point forward. progressStory() repeatedly
-        -- requests William Zeppeli's vampire quest until it appears, then farms it.
+
         return currentAutoProgressQuest() ~= nil
     end
 
@@ -5907,8 +5816,7 @@ local function setupAutoPrestige(parentTab)
             root.AssemblyAngularVelocity = Vector3.zero
             if anchored ~= nil then root.Anchored = anchored end
         end
-        -- Use Roblox's normal camera controller, just like the Player View example.
-        -- Do not set CFrame every frame: that overrides mouse camera rotation.
+
         local combatCamera = workspace.CurrentCamera
         local originalCameraType = combatCamera and combatCamera.CameraType
         local originalCameraSubject = combatCamera and combatCamera.CameraSubject
@@ -5928,7 +5836,7 @@ local function setupAutoPrestige(parentTab)
             if not target or not target.Parent then return nil end
             local targetHumanoid = target:FindFirstChildOfClass("Humanoid")
             local targetRoot = target:FindFirstChild("HumanoidRootPart")
-            -- Prefer Humanoid when present; otherwise use the NPC root part.
+            
             return targetHumanoid or targetRoot
         end
 
@@ -5948,8 +5856,6 @@ local function setupAutoPrestige(parentTab)
             end
         end
 
-        -- Match the reference script: apply just before and after Roblox's camera
-        -- update so other game scripts can't keep switching the view back to us.
         RunService:BindToRenderStep(
             beforeCameraName,
             Enum.RenderPriority.Camera.Value - 1,
@@ -6331,9 +6237,6 @@ local function setupAutoPrestige(parentTab)
             end
         end
 
-        -- Keep processing the mapped storyline dialogues whenever there is no
-        -- combat quest to kill. Talk-to-NPC and other non-combat quest entries
-        -- must not block the dialogue chain from reaching the next combat quest.
         if AP.Enabled and not AP.StorylineSweepCancelled and not currentAutoProgressQuest() then
             setStatus("Continuing the storyline.")
             fireStorylineSweep()
@@ -6349,10 +6252,7 @@ local function setupAutoPrestige(parentTab)
             and not delayVampFarmUntilStorylineEnd()
 
         if vampFarmMode then
-            -- Vamp Farm is a separate end phase: do not let the normal level
-            -- check or the generic "claim storyline" retry path decide whether
-            -- the vampire handoff happens. It is authorized only after all 18
-            -- mapped entries have been checked and every story combat quest is clear.
+
             if not vampSweepFinished then
                 setStatus("Finishing the storyline before Vamp Farm.")
                 return false
@@ -6367,9 +6267,7 @@ local function setupAutoPrestige(parentTab)
             end
 
             if not current[VAMPIRE_QUEST] then
-                -- Step 19 is a persistent handoff phase: explicitly replace any
-                -- leftover storyline dialogue with William Zeppeli's dialogue,
-                -- then keep retrying until the vampire quest is actually detected.
+
                 for attempt = 1, 12 do
                     if not AP.Enabled then return false end
                     current = autoQuests()
@@ -6413,15 +6311,10 @@ local function setupAutoPrestige(parentTab)
                 return true
             end
 
-            -- Keep the cursor at step 19 and retry the vampire dialogue on the
-            -- next pass. Never restart the 18-step sweep just because the quest
-            -- UI took longer than one dialogue attempt to update.
             setStatus("Storyline done. Waiting for the Vampire quest.")
             return false
         end
 
-        -- Preserve the original non-Vamp-Farm behavior for ordinary Storyline
-        -- mode, but do not let it start the vampire farm implicitly.
         local waitingForStorylineEnd = delayVampFarmUntilStorylineEnd()
         if AutoLevel.Value >= 25 and not quests[VAMPIRE_QUEST] and not waitingForStorylineEnd then
             local fresh = autoQuests()
@@ -6463,9 +6356,7 @@ local function setupAutoPrestige(parentTab)
         warnedNoKill = false
 
         while AP.Enabled do
-            -- Reaching level 50 ends ordinary Auto Storyline, but must not
-            -- block the explicit Vamp Farm flow. Vamp Farm still needs to
-            -- finish its 18-step discovery and obtain/complete the vampire quest.
+
             local vampFarmRequested = AP.Mode == "Vamp Farm" and AP.VampFarmModeRequested == true
             if AutoLevel.Value >= 50 and not vampFarmRequested then
                 notify("Auto Prestige", "Max level reached.", 7)
@@ -6507,12 +6398,10 @@ local function setupAutoPrestige(parentTab)
                         local atVampireHandoff = AP.VampFarmFullSweepCompleted == true
                             and (tonumber(AP.StorylineCursor) or 1) > #STORY_KEYS
                         if atVampireHandoff then
-                            -- Step 19 is the vampire handoff phase, not the end of the run.
-                            -- Leave the cursor here while the next pass re-requests the quest.
+
                             setStatus("Storyline done. Trying to start Vamp Farm again.")
                         else
-                            -- progressStory already made this pass's sweep attempt; do not
-                            -- invoke a second sweep from the fallback branch.
+
                             setStatus("Continuing Vamp Farm.")
                         end
                         task.wait(1)
@@ -6687,7 +6576,7 @@ local function setupAutoPrestige(parentTab)
                         AP.VampFarmSweepStarted = true
                         setStatus("Checking the storyline from the beginning.")
                     else
-                        -- Resume a known checkpoint instead of resetting to Dialogue 1.
+                        
                         local savedCursor = tonumber(AP.StorylineCursor)
                         local checkpointValid = AP.StorylineCursorVersion == 2
                             and AP.StorylineCheckpointKnown == true
@@ -6820,8 +6709,6 @@ function Halloween.countCandies()
     return total
 end
 
--- Read Jack's confirmed balance directly from his visible dialogue.
--- This avoids depending on a guessed game-side Value object name.
 function Halloween.captureJackPoints(gui)
     if not gui or not gui.Parent then return false end
     local ok, rawText = pcall(function()
@@ -6839,8 +6726,6 @@ function Halloween.captureJackPoints(gui)
     return true
 end
 
--- Find the event points value without assuming one specific game-side name.
--- Once Jack's dialogue confirms a balance, that value takes priority over unrelated stats.
 function Halloween.readJackPoints()
     local aliases = {
         jackpoints = 120,
@@ -6911,7 +6796,6 @@ function Halloween.readJackPoints()
         end
     end
 
-    -- Some games expose event counters as player attributes instead of Value objects.
     for name, value in pairs(LP:GetAttributes()) do
         local key = normalize(name)
         local score = aliases[key]
@@ -6992,7 +6876,6 @@ local function turnInHalloweenCandies()
             return
         end
 
-        -- Wait for Jack's balance sentence to appear, and capture it before closing the dialogue.
         local captureDeadline = tick() + 2.5
         repeat
             local responseDialogue = Gui.currentDialogue() or openedDialogue
@@ -7090,7 +6973,6 @@ task.spawn(function()
     while true do
         task.wait(0.4)
 
-        -- Also watch for Jack's response when the dialogue is opened or advanced manually.
         local activeDialogue = Gui.currentDialogue()
         if activeDialogue then
             Halloween.captureJackPoints(activeDialogue)
@@ -7191,15 +7073,17 @@ FarmSettings:Dropdown({
     Desc = bypassSupported and "Choose how to move between items." or "Instant isn't available here. Tween is enabled.",
     Icon = "zap",
     Values = bypassSupported and {"Instant", "Tween"} or {"Tween"},
-    Value = bypassSupported and "Instant" or "Tween",
+    Value = Config.FarmTeleportMode == "instant" and "Instant" or "Tween",
     Multi = false,
     Callback = function(selected)
         if selected == "Instant" and not bypassSupported then
             Config.FarmTeleportMode = "tween"
+            MethionSH_Env.__MethionSHFarmTeleportMode = Config.FarmTeleportMode
             AirflowCompat:Notify({Title = "Instant unavailable", Content = "Instant mode isn't supported here. Tween stays on.", Type = "Warning", Duration = 4})
             return
         end
         Config.FarmTeleportMode = (selected == "Instant" and bypassSupported) and "instant" or "tween"
+        MethionSH_Env.__MethionSHFarmTeleportMode = Config.FarmTeleportMode
     end,
 })
 FarmSettings:Dropdown({
@@ -7214,10 +7098,11 @@ FarmSettings:Dropdown({
         "Ancient Scroll", "Caesar's Headband", "Clackers", "Zeppeli's Hat",
         "Christmas Present", "Green Candy", "Red Candy", "Blue Candy", "Yellow Candy",
     },
-    Value = {"All items"},
+    Value = #Config.FarmOnlyItems > 0 and Config.FarmOnlyItems or {"All items"},
     Multi = true,
     Callback = function(selected)
         Config.FarmOnlyItems = selected or {}
+        MethionSH_Env.__MethionSHFarmOnlyItems = Config.FarmOnlyItems
     end,
 })
 FarmSettings:Slider({
@@ -7258,12 +7143,13 @@ FarmSettings:Toggle({
     end,
 })
 FarmSettings:Toggle({
-    Title = "Auto Rejoin",
-    Desc = "Rejoin after a kick or disconnect.",
+    Title = "Reload script on kick",
+    Desc = "Rejoin, enter the game, and reload the script after a kick.",
     Icon = "refresh-cw",
-    Value = true,
+    Value = Config.AutoRejoinEnabled,
     Callback = function(state)
         Config.AutoRejoinEnabled = state == true
+        MethionSH_Env.__MethionSHReloadOnKick = Config.AutoRejoinEnabled
         if state then Rejoin.start() else Rejoin.stop() end
     end,
 })
@@ -8210,8 +8096,7 @@ StandPilot.ActiveSpeedMode = nil
 
 local STAND_PILOT_GROUND_LIFT = 0.55
 local STAND_PILOT_ANIMATION_IDS = {
-    -- Both idle tracks were captured starting together, so keep them as a pair.
-    -- Movement priority lets the custom idle pose take precedence over the default idle animation.
+
     {Name = "Idle", Id = "rbxassetid://4628343401", Priority = Enum.AnimationPriority.Movement},
     {Name = "IdleSecondary", Id = "rbxassetid://4653736266", Priority = Enum.AnimationPriority.Movement},
     {Name = "SlowWalk", Id = "rbxassetid://4773319528", Priority = Enum.AnimationPriority.Movement},
@@ -8367,8 +8252,6 @@ local function updateStandPilotMovementAnimation()
 
     applyStandPilotSpeed(stateName)
 
-    -- These two tracks were observed beginning together in the collector.
-    -- Keep both active only while idle, rather than stopping the second one as an unrelated track.
     if stateName == "Idle" then
         for name, track in pairs(StandPilot.AnimationTracks or {}) do
             if track and name ~= "Idle" and name ~= "IdleSecondary" then
@@ -9156,8 +9039,6 @@ Players.PlayerRemoving:Connect(function()
     end)
 end)
 
--- Stand Models: catalog only actual live player StandMorph rigs.
--- A selected rig is cloned as a local visual overlay on the local player's stand.
 if _G.__MethionStandModels then
     _G.__MethionStandModels.AutoApplyRunning = false
     if type(_G.__MethionStandModels.RestoreVisual) == "function" then
@@ -9200,9 +9081,6 @@ _G.__MethionStandModels.SetStatus = function(message)
     end
 end
 
--- Hard no-collision layer for the visual replacement. CanCollide=false is always
--- enforced as a fallback; the dedicated collision group also prevents contact
--- if another script accidentally flips CanCollide back on.
 _G.__MethionStandModels.EnsureGhostCollisionGroup = function()
     local state = _G.__MethionStandModels
     if state.GhostCollisionGroupReady and state.GhostCollisionGroup then
@@ -9431,8 +9309,7 @@ _G.__MethionStandModels.RestoreVisual = function(keepToggleState, preserveHidden
     state.JointMap = {}
     state.AppliedStand = nil
     if preserveHiddenStand and state.HiddenStand and state.HiddenStand.Parent then
-        -- During a model swap, keep the original stand hidden and non-collidable.
-        -- Restoring its original collision here for even one frame can shove the player.
+
         _G.__MethionStandModels.HideOriginalStand(state.HiddenStand)
     else
         _G.__MethionStandModels.RestoreHiddenParts()
@@ -9504,8 +9381,7 @@ _G.__MethionStandModels.ApplyVisual = function(keepToggleState)
     _G.__MethionStandModels.RestoreVisual(true, replacingActiveVisual)
 
     local function abortApply(message)
-        -- Keep the user's request enabled. A model or stand may simply not be ready yet;
-        -- the auto-apply watcher will retry when both become available.
+
         if keepToggleState == true or state.UseVisual == true then
             state.UseVisual = true
         end
@@ -9552,9 +9428,6 @@ _G.__MethionStandModels.ApplyVisual = function(keepToggleState)
         return abortApply("The selected live stand has no usable root part, so it cannot be aligned to yours.")
     end
 
-    -- Retarget the LOCAL player's current stand pose onto the selected model.
-    -- The selected player's model supplies only the appearance; every Motor6D/Bone
-    -- transform comes from the local player's own StandMorph, so its animations win.
     local function relativePath(rootModel, object)
         local path = {}
         local current = object
@@ -9596,8 +9469,6 @@ _G.__MethionStandModels.ApplyVisual = function(keepToggleState)
         end
     end
 
-    -- Keep the model's connected rig attached to its root while allowing its
-    -- Motor6Ds/Bones to pose the limbs. Only detached decorative pieces stay anchored.
     local connectedParts = {}
     local adjacency = {}
     local function linkParts(a, b)
@@ -9636,9 +9507,6 @@ _G.__MethionStandModels.ApplyVisual = function(keepToggleState)
     clone.Name = "MethionLocalStandModel"
     pcall(function() clone:SetAttribute("MethionVisualStandModel", true) end)
 
-    -- Hard-noclip every body part and accessory BEFORE the rig enters Workspace.
-    -- A dedicated non-colliding group backs up CanCollide=false if another script
-    -- changes a part's flag while the avatar is being swapped.
     local ghostGroup = _G.__MethionStandModels.EnsureGhostCollisionGroup()
     for _, object in ipairs(clone:GetDescendants()) do
         if object:IsA("BasePart") then
@@ -9669,8 +9537,6 @@ _G.__MethionStandModels.ApplyVisual = function(keepToggleState)
     _G.__MethionStandModels.MakeModelNoCollision(clone)
     pcall(function() clone:PivotTo(standRoot.CFrame * rootToPivot) end)
 
-    -- Reassert no-collision immediately before each physics simulation. This also
-    -- catches accessory/body parts inserted after loading and protects model swaps.
     state.VisualNoclipConnection = RunService.Stepped:Connect(function()
         if not state.UseVisual or not state.VisualClone or not state.VisualClone.Parent then return end
         _G.__MethionStandModels.MakeModelNoCollision(state.VisualClone)
@@ -9686,8 +9552,6 @@ _G.__MethionStandModels.ApplyVisual = function(keepToggleState)
     state.VisualConnection = RunService.RenderStepped:Connect(function()
         if not state.UseVisual or not state.VisualClone or not state.VisualClone.Parent then return end
 
-        -- Copy YOUR live stand's animated pose onto the selected skin/model.
-        -- Do not read animation transforms from the other player after cloning.
         for _, pair in ipairs(state.JointMap or {}) do
             local sourceJoint = pair.Source
             local cloneJoint = pair.Clone
@@ -9699,16 +9563,14 @@ _G.__MethionStandModels.ApplyVisual = function(keepToggleState)
         local currentStand = _G.__MethionStandModels.GetLocalStand()
         local currentRoot = currentStand and (currentStand:FindFirstChild("HumanoidRootPart", true) or currentStand.PrimaryPart or currentStand:FindFirstChildWhichIsA("BasePart", true))
         if not currentStand or not currentRoot or not _G.__MethionStandModels.IsLocalStandActive(currentStand) then
-            -- Remove the temporary overlay, but keep Use this model enabled so it can
-            -- be restored automatically when the player summons their stand again.
+
             _G.__MethionStandModels.RestoreVisual(true)
             state.AutoApplyWaitingForStand = true
             _G.__MethionStandModels.SetStatus("Use this model is still enabled. Summon your stand and the selected model will apply automatically.")
             return
         end
         if currentStand ~= state.AppliedStand then
-            -- The active stand instance changed. Restore the old one before attaching to
-            -- the new instance, without changing the user's toggle preference.
+
             _G.__MethionStandModels.RestoreVisual(true)
             state.AutoApplyWaitingForStand = false
             _G.__MethionStandModels.SetStatus("Your stand changed. Reapplying the selected model automatically...")
@@ -9745,7 +9607,7 @@ _G.__MethionStandModels.StartAutoApply = function()
                     state.AutoApplyWaitingForModel = false
                 else
                     if state.VisualClone and state.VisualClone.Parent then
-                        -- Do not keep an old stand hidden if a new stand instance appeared.
+                        
                         _G.__MethionStandModels.RestoreVisual(true)
                     end
 
@@ -9790,8 +9652,6 @@ _G.__MethionStandModels.Scan = function()
     state.SelectedModel = nil
     state.SelectedPlayer = nil
 
-    -- YBA's reusable model library is not reliably replicated as discoverable assets.
-    -- Build the dropdown only from StandMorph models currently worn by online players.
     local seenModels = {}
     for _, player in ipairs(Players:GetPlayers()) do
         local stand = _G.__MethionStandModels.GetPlayerStand(player)
@@ -9897,7 +9757,6 @@ _G.__MethionStandModels.LoadPlayerCharacter = function(username)
         end
     end
 
-    -- Fallback for clients where the HumanoidDescription model APIs are restricted.
     if not model then
         local appearanceMethod
         pcall(function() appearanceMethod = Players.GetCharacterAppearanceAsync end)
@@ -9911,7 +9770,6 @@ _G.__MethionStandModels.LoadPlayerCharacter = function(username)
         end
     end
 
-    -- On the online case, fall back to a local clone of the player's currently replicated character.
     local onlinePlayer = Players:GetPlayerByUserId(userId)
     if not model and onlinePlayer and onlinePlayer.Character then
         local character = onlinePlayer.Character
@@ -9939,9 +9797,7 @@ _G.__MethionStandModels.LoadPlayerCharacter = function(username)
     local modelName = "MethionAvatar_" .. tostring(userId)
     local oldModel = cache:FindFirstChild(modelName)
     if oldModel then
-        -- The active visual is already a separate clone in Workspace. Keep it running
-        -- until SelectModel applies the freshly loaded source, avoiding a collision
-        -- restore / re-hide gap while reloading the same username.
+
         pcall(function() oldModel:Destroy() end)
     end
     local modelRoot = model:FindFirstChild("HumanoidRootPart", true) or model:FindFirstChildWhichIsA("BasePart", true)
@@ -10065,8 +9921,7 @@ _G.__MethionStandModels.UseToggle = _G.__MethionStandModels.LibrarySection:Toggl
             _G.__MethionStandModels.StartAutoApply()
             local ok, result = pcall(function() return _G.__MethionStandModels.ApplyVisual(true) end)
             if not ok or result ~= true then
-                -- Stay toggled on; retry when the model/stand is available instead of
-                -- forcing the UI toggle off after a temporary failure or unequip.
+
                 _G.__MethionStandModels.UseVisual = true
                 _G.__MethionStandModels.StartAutoApply()
                 _G.__MethionStandModels.SetStatus("Use this model remains enabled. It will apply automatically when your selected model and summoned stand are available.")
@@ -10835,12 +10690,13 @@ _G.__MethionSettingsSections.Performance = SettingsTab:Section({Title = "Perform
 
 _G.__MethionSettingsSections.General:Paragraph({Title = "General Settings", Desc = "Rejoin and auto-farm settings."})
 _G.__MethionSettingsSections.General:Toggle({
-    Title = "Auto Rejoin",
-    Desc = "Rejoin after a kick or disconnect.",
+    Title = "Reload script on kick",
+    Desc = "Rejoin, enter the game, and reload the script after a kick.",
     Icon = "refresh-cw",
-    Value = true,
+    Value = Config.AutoRejoinEnabled,
     Callback = function(state)
-        Config.AutoRejoinEnabled = state
+        Config.AutoRejoinEnabled = state == true
+        MethionSH_Env.__MethionSHReloadOnKick = Config.AutoRejoinEnabled
         if state then Rejoin.start() else Rejoin.stop() end
     end,
 })
@@ -10954,7 +10810,7 @@ do
     addInfoLabel(systemsSection, "PlayerESP", "Player ESP", "Checking...")
     addInfoLabel(systemsSection, "ItemFarm", "Item Farm", "Checking...")
     addInfoLabel(systemsSection, "QuestFarm", "Quest Farm", "Checking...")
-    addInfoLabel(systemsSection, "AutoRejoin", "Auto Rejoin", "Checking...")
+    addInfoLabel(systemsSection, "AutoRejoin", "Reload script on kick", "Checking...")
     addInfoLabel(systemsSection, "Selling", "Selling System", "Checking...")
     addInfoLabel(systemsSection, "Spectate", "Player Spectate", "Checking...")
     addInfoLabel(systemsSection, "LowGraphics", "Low Graphics", "Checking...")
@@ -11049,7 +10905,7 @@ do
             "Player ESP: " .. tostring(State.PlayerEsp == true),
             "Item farm: " .. tostring(State.Farm == true),
             "Quest farm: " .. tostring(questFarmEnabled()),
-            "Auto rejoin: " .. tostring(Config.AutoRejoinEnabled == true),
+            "Reload script on kick: " .. tostring(Config.AutoRejoinEnabled == true),
             "Selling: " .. tostring(State.Selling == true),
         }
         return table.concat(lines, "\n")
@@ -11099,9 +10955,6 @@ do
     end)
 end
 
-
--- Legacy UI adapter for the imported quest/NPC farm module.
--- Globals are intentionally used here so adding the module does not consume main-chunk local registers.
 _G.__PhantomQuestFarmWrapSection = function(rawSection)
     local wrapped = {}
 
@@ -11557,9 +11410,6 @@ return function(Window, player, QuestTab, config)
 			end)
 		end
 
-		-- Keep both Quest Controller rows on the exact same farming snapshot.
-		-- Sync even when the status text has not changed, because the progress row
-		-- may have been refreshed by another update between status ticks.
 		if nextPhase == "Farming selected target" then
 			pcall(function()
 				if QuestProgressLabel and QuestProgressLabel.SetDesc then
@@ -11665,8 +11515,6 @@ return function(Window, player, QuestTab, config)
 		local humanoid = char:FindFirstChildWhichIsA("Humanoid")
 		if not playerRoot or not npcRoot or not humanoid or humanoid.Health <= 0 then return end
 
-		-- Mirror Auto Storyline's stick: position the actual player root directly
-		-- on every Heartbeat. Do not use MoveTo, which makes the character walk in.
 		local verticalOffset = handheld and 1.5 or (tonumber(FarmConfig.Distance) or -28)
 		local backOffset = handheld and 2.5 or 1.8
 		local follow = npcRoot.CFrame - npcRoot.CFrame.LookVector * backOffset
@@ -11676,8 +11524,6 @@ return function(Window, player, QuestTab, config)
 		local stand = char:FindFirstChild("StandMorph")
 		local standRoot = stand and (stand.PrimaryPart or stand:FindFirstChild("HumanoidRootPart"))
 		if not handheld and standRoot then
-			-- Keep the stand behind the NPC at the NPC's height; the player's own
-			-- root keeps the proven stick position used by the current working fix.
 			local standFollow = npcRoot.CFrame - npcRoot.CFrame.LookVector * 2.5
 			standFollow = standFollow + Vector3.new(0, 1.5, 0)
 			standRoot.CFrame = CFrame.lookAt(standFollow.Position, npcRoot.Position)
@@ -11868,8 +11714,6 @@ return function(Window, player, QuestTab, config)
 					if containsDialoguePhrase(text, word) then score = score - 5 end
 				end
 
-				-- A zero-score option is a safe fallback only when its text is neutral or unavailable.
-				-- Explicit decline/cancel options are never selected as a fallback.
 				if score >= 0 then
 					if not firstSafeButton then
 						firstSafeName, firstSafeButton = optionName, button
@@ -11978,7 +11822,6 @@ return function(Window, player, QuestTab, config)
 				local signature = questDialogueSignature(gui)
 				local optionName, target = chooseQuestOption(gui, mode)
 				if signature == lastActionSignature and target == lastActionTarget then
-					-- The same button is still on the same page. Never click it repeatedly.
 					if tick() - lastActionAt >= 2 then
 						if QuestRuntime.DialogueTarget == NPC.Name then QuestRuntime.DialogueTarget = nil end
 						return clickedAny
@@ -12139,7 +11982,6 @@ return function(Window, player, QuestTab, config)
 				end)
 			end
 
-
 			if not handheld then
 				FarmUtil.EquipStand()
 				local standWaitTimeout = tick() + 4
@@ -12154,8 +11996,6 @@ return function(Window, player, QuestTab, config)
 				local currentEnemyHRP = enemy:FindFirstChild("HumanoidRootPart")
 				local h = enemy:FindFirstChild("Health")
 				if h and h.Value <= 0 then
-					-- Keep the current enemy as the stick/camera target briefly after death,
-					-- then let the main loop acquire the next NPC.
 					task.wait(0.25)
 					break
 				end
@@ -12275,8 +12115,6 @@ return function(Window, player, QuestTab, config)
 			end
 			task.wait(0.1)
 		end
-		-- Stay at the objective after collecting; returning to the saved pre-collect
-		-- CFrame made unsupported executors visibly bounce between two positions.
 		return not item.Parent
 	end
 
@@ -12290,10 +12128,6 @@ return function(Window, player, QuestTab, config)
 		["DIO [Lvl. 35+]"] = { Enemy = "Jotaro" },
 	}
 
-	-- Keep the full quest catalog independent from which quest-giver models happen
-	-- to be replicated at script startup. ParsedQuests is a UI/catalog list, not a
-	-- list of currently streamed NPCs; otherwise Auto Select can get stuck on Dracula
-	-- simply because higher-level givers had not replicated yet.
 	local QUEST_LEVEL_REQUIREMENTS = {
 		["Officer Sam [Lvl. 1+]"] = 1,
 		["Deputy Bertrude [Lvl. 10+]"] = 10,
@@ -12373,9 +12207,6 @@ return function(Window, player, QuestTab, config)
 		local level = tonumber(currentLevel) or 0
 		local bestQuest, highestReq = nil, -1
 
-		-- Always rank the complete quest catalog, not ParsedQuests' replicated NPCs.
-		-- A giver being late to replicate must never force Auto Select back to Dracula.
-		-- Strictly greater also makes the first configured quest win level-15 ties.
 		for _, questName in ipairs(QUEST_SELECTION_ORDER) do
 			if QuestInfo[questName] then
 				local requirement = QUEST_LEVEL_REQUIREMENTS[questName]
@@ -12386,7 +12217,6 @@ return function(Window, player, QuestTab, config)
 			end
 		end
 
-		-- Preserve compatibility with quest definitions added to QuestInfo later.
 		if not bestQuest then
 			for questName in pairs(QuestInfo) do
 				local requirement = QUEST_LEVEL_REQUIREMENTS[questName]
@@ -12588,14 +12418,11 @@ return function(Window, player, QuestTab, config)
 		local function displayQuestProgressValues()
 			local progress, maximum = questProgressValues()
 			if tick() < ignoreProgressCompletionUntil and not FarmState.CompletedQuest then
-				-- Do not show the previous quest's counter while the next quest loads.
 				return 0, math.max(maximum, trackedQuestMaximum, 0)
 			end
 			if acceptAttempted and maximum > 0 then
 				trackedQuestMaximum = math.max(trackedQuestMaximum, maximum)
 			end
-			-- Some quest stats briefly report a maximum below the final kill count.
-			-- Keep the greatest maximum seen this cycle and never display progress > maximum.
 			local displayMaximum = math.max(maximum, trackedQuestMaximum, progress, 0)
 			local displayProgress = math.max(0, progress)
 			if displayMaximum > 0 then
@@ -12636,8 +12463,6 @@ return function(Window, player, QuestTab, config)
 				detail ..= "  •  " .. tostring(progress) .. "/" .. tostring(maximum)
 			end
 
-			-- Publish one authoritative string to Automation Status and Selected Target.
-			-- This prevents the two rows from sampling progress at different moments.
 			setQuestStatus("Farming selected target", detail)
 		end
 
@@ -13046,7 +12871,6 @@ return function(Window, player, QuestTab, config)
 	QuestLeft = QuestTab:Section("Quest Controller", "Left", "target")
 	QuestRight = QuestTab:Section("NPC Farm & Tools", "Right", "swords")
 
-	
 	getgenv().QuestDelay = tonumber(getgenv().QuestDelay) or 0.6
 	getgenv().QuestMethod = getgenv().QuestMethod or "With Stand"
 	getgenv().CompletedQuest = false
@@ -13082,8 +12906,6 @@ return function(Window, player, QuestTab, config)
 		if type(selected) == "table" then selected = selected[1] end
 		if not (type(selected) == "string" and QuestInfo[selected]) then return end
 
-		-- Choosing a quest manually is an explicit instruction to use that target.
-		-- Disable auto-best and synchronize the visible toggle when the control supports it.
 		if getgenv().AutoSelectBestQuest then
 			getgenv().AutoSelectBestQuest = false
 			if AutoSelectBestQuestToggle then
@@ -13404,7 +13226,6 @@ if not _G.__PhantomQuestFarmLoaded then
     end)
 end
 
-
 ItemESP.scan()
 
 if _G.__PhantomViewerAddTarget then
@@ -13448,8 +13269,6 @@ local function setBoostedSpawnTarget(itemName, itemPart)
         return
     end
 
-    -- Queue spawn events directly. Duplicate events for the same part are
-    -- deduplicated, while separate items are kept so simultaneous spawns aren't lost.
     Farm.queueBoostedTarget(itemPart)
 end
 
@@ -13470,9 +13289,7 @@ function Farm.notifySpawnedItem(itemName, itemPart)
 end
 
 workspace.DescendantAdded:Connect(function(o)
-    -- Process the spawn event immediately. If the item's prompt receives its
-    -- ObjectText slightly later, listen for that property rather than missing
-    -- the notification or waiting for a periodic scan.
+
     if not o or not o.Parent then return end
     if o:IsA("ProximityPrompt") then
         ItemESP.register(o)
