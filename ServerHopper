@@ -8,7 +8,7 @@ local PhysicsService = game:GetService("PhysicsService")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 
-local METHIONSH_RAW_URL = "https://raw.githubusercontent.com/glatinolatina/Riderpets/refs/heads/main/ServerHopper"
+local METHIONSH_RAW_URL = "https://raw.githubusercontent.com/glatinolatina/Modules/refs/heads/main/fad"
 local MethionSH_Env = type(getgenv) == "function" and getgenv() or _G
 local SH_AUTOSTART = MethionSH_Env.__MethionSHAutoStart == true
 if SH_AUTOSTART then MethionSH_Env.__MethionSHAutoStart = nil end
@@ -4632,29 +4632,9 @@ local function queueNextRun(url, autoStart)
         "    if not hopOk then pcall(function() TeleportService:Teleport(game.PlaceId, player) end) end",
         "    return",
         "end",
-        "task.wait(0.35)",
-        "local sourceUrls = {" .. string.format("%q", url) .. "}",
-        "local configuredUrl = sourceUrls[1]",
-        "local standardUrl = configuredUrl:gsub('/refs/heads/', '/')",
-        "if standardUrl ~= configuredUrl then table.insert(sourceUrls, standardUrl) end",
-        "local webRawUrl = configuredUrl:gsub('^https://raw%.githubusercontent%.com/([^/]+)/([^/]+)/', 'https://github.com/%1/%2/raw/')",
-        "if webRawUrl ~= configuredUrl and webRawUrl ~= standardUrl then table.insert(sourceUrls, webRawUrl) end",
-        "local source, fetchError",
-        "for attempt = 1, 6 do",
-        "    for _, candidateUrl in ipairs(sourceUrls) do",
-        "        local fetchOk, response = pcall(function() return game:HttpGet(candidateUrl) end)",
-        "        if fetchOk and type(response) == 'string' and #response > 100 then",
-        "            local compileOk, candidateChunk, compileError = pcall(function() return loadstring(response) end)",
-        "            if compileOk and type(candidateChunk) == 'function' then source = response; break end",
-        "            fetchError = tostring(compileError or candidateChunk or 'source compile failed')",
-        "        else",
-        "            fetchError = tostring(response or 'empty source response')",
-        "        end",
-        "    end",
-        "    if source then break end",
-        "    task.wait(math.min(attempt, 3))",
-        "end",
-        "assert(type(source) == 'string', 'MethionSH URL fetch failed: ' .. tostring(fetchError or 'no response'))",
+        "task.wait(0.5)",
+        "local source = game:HttpGet(" .. string.format("%q", url) .. ")",
+        "assert(type(source) == 'string' and #source > 0, 'MethionSH source is empty')",
         "local chunk, err = loadstring(source)",
         "assert(type(chunk) == 'function', tostring(err or 'MethionSH compile failed'))",
         "chunk()",
