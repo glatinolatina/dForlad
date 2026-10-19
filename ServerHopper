@@ -8,7 +8,7 @@ local PhysicsService = game:GetService("PhysicsService")
 local HttpService = game:GetService("HttpService")
 local TeleportService = game:GetService("TeleportService")
 
-local METHIONSH_RAW_URL = "https://raw.githubusercontent.com/Methions/Methion/refs/heads/main/Mandom"
+local METHIONSH_RAW_URL = "https://raw.githubusercontent.com/glatinolatina/dForlad/refs/heads/main/ServerHopper"
 local MethionSH_Env = type(getgenv) == "function" and getgenv() or _G
 local SH_AUTOSTART = MethionSH_Env.__MethionSHAutoStart == true
 if SH_AUTOSTART then MethionSH_Env.__MethionSHAutoStart = nil end
@@ -4401,6 +4401,27 @@ local SHController = {
 _G.__MethionSHController = SHController
 local AFKFarmToggle = nil
 
+local SHStats = MethionSH_Env.__MethionSHStats
+if type(SHStats) ~= "table" then SHStats = {} end
+local activeJobId = tostring(game.JobId or "")
+local sameStatsServer = activeJobId ~= "" and SHStats.CurrentJobId == activeJobId
+SHStats.ServersHopped = math.max(0, math.floor(tonumber(SHStats.ServersHopped) or 0))
+SHStats.ItemsCollected = math.max(0, math.floor(tonumber(SHStats.ItemsCollected) or 0))
+SHStats.LifetimeMoneyEarned = math.max(0, tonumber(SHStats.LifetimeMoneyEarned) or 0)
+SHStats.CurrentServerItems = math.max(0, math.floor(tonumber(SHStats.CurrentServerItems) or 0))
+SHStats.CurrentServerMoneyEarned = math.max(0, tonumber(SHStats.CurrentServerMoneyEarned) or 0)
+SHStats.StartedAt = tonumber(SHStats.StartedAt) or os.time()
+SHStats.Status = "Idle"
+if not sameStatsServer then
+    SHStats.CurrentJobId = activeJobId
+    SHStats.CurrentServerItems = 0
+    SHStats.CurrentServerMoneyEarned = 0
+    SHStats.ServerStartedAt = os.time()
+    SHStats.LastMoneyObserved = nil
+end
+MethionSH_Env.__MethionSHStats = SHStats
+local shTeleportPending = false
+
 local function isJobVisited(jobId)
     for _, visitedId in ipairs(SHController.VisitedJobs) do
         if visitedId == jobId then return true end
@@ -4574,10 +4595,24 @@ local function queueNextRun(url, autoStart)
     local mode = Config.FarmTeleportMode == "tween" and "tween" or "instant"
     local filterJson = HttpService:JSONEncode(Config.FarmOnlyItems or {})
     local visitedJson = HttpService:JSONEncode(SHController.VisitedJobs)
+    local statsPayload = {
+        ServersHopped = SHStats.ServersHopped,
+        ItemsCollected = SHStats.ItemsCollected,
+        LifetimeMoneyEarned = SHStats.LifetimeMoneyEarned,
+        CurrentServerItems = SHStats.CurrentServerItems,
+        CurrentServerMoneyEarned = SHStats.CurrentServerMoneyEarned,
+        StartedAt = SHStats.StartedAt,
+        CurrentJobId = SHStats.CurrentJobId,
+        LastMoneyObserved = SHStats.LastMoneyObserved,
+        ServerStartedAt = SHStats.ServerStartedAt,
+    }
+    local statsJson = HttpService:JSONEncode(statsPayload)
     local queueSource = table.concat({
         "repeat task.wait() until game:IsLoaded()",
         "local env = type(getgenv) == \"function\" and getgenv() or _G",
         "local http = game:GetService(\"HttpService\")",
+        "local statsOk, stats = pcall(function() return http:JSONDecode(" .. string.format("%q", statsJson) .. ") end)",
+        "if statsOk and type(stats) == \"table\" then env.__MethionSHStats = stats end",
         "local mode = " .. string.format("%q", mode),
         "env.__MethionSHFarmTeleportMode = mode",
         "local filterOk, filter = pcall(function() return http:JSONDecode(" .. string.format("%q", filterJson) .. ") end)",
@@ -4669,15 +4704,28 @@ function SHController:hop()
     rememberCurrentJob()
     local target = getPublicServerCandidate()
     if not target then
+        SHStats.Status = "Retrying"
         warn("[MethionSH] No different public server was found. Retrying soon.")
         return false
     end
-    if not queueNextRun(url, true) then return false end
 
+    local previousHopCount = SHStats.ServersHopped
+    SHStats.ServersHopped = previousHopCount + 1
+    SHStats.Status = "Hopping"
+    if not queueNextRun(url, true) then
+        SHStats.ServersHopped = previousHopCount
+        SHStats.Status = "Retrying"
+        return false
+    end
+
+    shTeleportPending = true
     local ok, err = pcall(function()
         TeleportService:TeleportToPlaceInstance(game.PlaceId, target.id, LP)
     end)
     if not ok then
+        shTeleportPending = false
+        SHStats.ServersHopped = previousHopCount
+        SHStats.Status = "Retrying"
         warn("[MethionSH] Server hop failed: " .. tostring(err))
         return false
     end
@@ -4698,6 +4746,7 @@ function SHController:stop()
     self.Running = false
     self.Token += 1
     _G.__MethionSHPreloading = false
+    SHStats.Status = "Idle"
 end
 
 function SHController:start()
@@ -4708,6 +4757,7 @@ function SHController:start()
     local myToken = self.Token
     State.Farm = true
     State.NoClip = true
+    SHStats.Status = "Starting"
     _G.__MethionSHPreloading = true
 
     task.spawn(function()
@@ -4746,6 +4796,7 @@ function SHController:start()
         if not self.Enabled or self.Token ~= myToken then return end
         _G.__MethionSHPreloading = false
         State.Farm = true
+        SHStats.Status = "Farming"
         local sawItems = countFarmableItems() > 0
         local emptySince = nil
 
@@ -4794,6 +4845,409 @@ function SHController:start()
         end
     end)
 end
+
+if MethionSH_Env.__MethionSHTeleportFailedConnection then
+    pcall(function() MethionSH_Env.__MethionSHTeleportFailedConnection:Disconnect() end)
+end
+MethionSH_Env.__MethionSHTeleportFailedConnection = TeleportService.TeleportInitFailed:Connect(function(player)
+    if player == LP and shTeleportPending then
+        shTeleportPending = false
+        SHStats.ServersHopped = math.max(0, SHStats.ServersHopped - 1)
+        SHStats.Status = "Retrying"
+    end
+end)
+
+local function shFormatNumber(value)
+    local number = math.max(0, math.floor(tonumber(value) or 0))
+    local formatted = tostring(number):reverse():gsub("(%d%d%d)", "%1,"):reverse()
+    return formatted:gsub("^,", "")
+end
+
+local function shFormatDuration(seconds)
+    seconds = math.max(0, math.floor(tonumber(seconds) or 0))
+    local hours = math.floor(seconds / 3600)
+    local minutes = math.floor((seconds % 3600) / 60)
+    local remaining = seconds % 60
+    return string.format("%02d:%02d:%02d", hours, minutes, remaining)
+end
+
+local itemToolSeen = setmetatable({}, {__mode = "k"})
+local inventoryContainers = setmetatable({}, {__mode = "k"})
+local oldInventoryConnections = MethionSH_Env.__MethionSHInventoryConnections
+if type(oldInventoryConnections) == "table" then
+    for _, connection in ipairs(oldInventoryConnections) do
+        pcall(function() connection:Disconnect() end)
+    end
+end
+local inventoryConnections = {}
+MethionSH_Env.__MethionSHInventoryConnections = inventoryConnections
+local function isFarmItemTool(tool)
+    if not tool or not tool:IsA("Tool") then return false end
+    local name = tostring(tool.Name or "")
+    local normalized = name:gsub("^%s*%d+%s*[xX]%s*", "")
+    return ESP_ITEMS[name] ~= nil or ESP_ITEMS[normalized] ~= nil
+end
+
+local function countNewFarmItemTool(tool)
+    if not isFarmItemTool(tool) or itemToolSeen[tool] then return end
+    itemToolSeen[tool] = true
+    SHStats.ItemsCollected += 1
+    SHStats.CurrentServerItems += 1
+end
+
+local function bindInventoryContainer(container)
+    if not container or inventoryContainers[container] then return end
+    inventoryContainers[container] = true
+    for _, child in ipairs(container:GetChildren()) do
+        if isFarmItemTool(child) then itemToolSeen[child] = true end
+    end
+    table.insert(inventoryConnections, container.ChildAdded:Connect(countNewFarmItemTool))
+end
+
+local backpack = LP:FindFirstChildOfClass("Backpack") or LP:FindFirstChild("Backpack")
+if backpack then bindInventoryContainer(backpack) end
+if LP.Character then bindInventoryContainer(LP.Character) end
+if MethionSH_Env.__MethionSHBackpackWatcher then
+    pcall(function() MethionSH_Env.__MethionSHBackpackWatcher:Disconnect() end)
+end
+MethionSH_Env.__MethionSHBackpackWatcher = LP.ChildAdded:Connect(function(child)
+    if child:IsA("Backpack") or child.Name == "Backpack" then
+        bindInventoryContainer(child)
+    end
+end)
+if MethionSH_Env.__MethionSHCharacterAddedConnection then
+    pcall(function() MethionSH_Env.__MethionSHCharacterAddedConnection:Disconnect() end)
+end
+MethionSH_Env.__MethionSHCharacterAddedConnection = LP.CharacterAdded:Connect(function(character)
+    bindInventoryContainer(character)
+end)
+
+local function bindMoneyStat()
+    local statsFolder = LP:FindFirstChild("PlayerStats")
+    if not statsFolder then return false end
+    local money = statsFolder:FindFirstChild("Money")
+    if not money or not money:IsA("ValueBase") then return false end
+
+    if MethionSH_Env.__MethionSHMoneyValueConnection then
+        pcall(function() MethionSH_Env.__MethionSHMoneyValueConnection:Disconnect() end)
+    end
+    local function recordMoney(value)
+        local amount = tonumber(value)
+        if not amount then return end
+        local previous = tonumber(SHStats.LastMoneyObserved)
+        if previous and SHStats.CurrentJobId == activeJobId then
+            local delta = amount - previous
+            if delta > 0 then
+                SHStats.LifetimeMoneyEarned += delta
+                SHStats.CurrentServerMoneyEarned += delta
+            end
+        end
+        SHStats.LastMoneyObserved = amount
+    end
+    recordMoney(money.Value)
+    MethionSH_Env.__MethionSHMoneyValueConnection = money:GetPropertyChangedSignal("Value"):Connect(function()
+        recordMoney(money.Value)
+    end)
+    return true
+end
+
+if MethionSH_Env.__MethionSHMoneyValueConnection then
+    pcall(function() MethionSH_Env.__MethionSHMoneyValueConnection:Disconnect() end)
+end
+if MethionSH_Env.__MethionSHStatsFolderConnection then
+    pcall(function() MethionSH_Env.__MethionSHStatsFolderConnection:Disconnect() end)
+end
+if MethionSH_Env.__MethionSHPlayerStatsAddedConnection then
+    pcall(function() MethionSH_Env.__MethionSHPlayerStatsAddedConnection:Disconnect() end)
+end
+bindMoneyStat()
+local statsFolder = LP:FindFirstChild("PlayerStats")
+if statsFolder then
+    MethionSH_Env.__MethionSHStatsFolderConnection = statsFolder.ChildAdded:Connect(function(child)
+        if child.Name == "Money" then task.defer(bindMoneyStat) end
+    end)
+end
+MethionSH_Env.__MethionSHPlayerStatsAddedConnection = LP.ChildAdded:Connect(function(child)
+    if child.Name == "PlayerStats" then
+        task.defer(function()
+            if child.Parent == LP then
+                bindMoneyStat()
+                if MethionSH_Env.__MethionSHStatsFolderConnection then
+                    pcall(function() MethionSH_Env.__MethionSHStatsFolderConnection:Disconnect() end)
+                end
+                MethionSH_Env.__MethionSHStatsFolderConnection = child.ChildAdded:Connect(function(valueObject)
+                    if valueObject.Name == "Money" then task.defer(bindMoneyStat) end
+                end)
+            end
+        end)
+    end
+end)
+
+local function createServerStatsPanel()
+    local oldConnections = MethionSH_Env.__MethionSHStatsUiConnections
+    if type(oldConnections) == "table" then
+        for _, connection in ipairs(oldConnections) do
+            pcall(function() connection:Disconnect() end)
+        end
+    end
+    local connections = {}
+    MethionSH_Env.__MethionSHStatsUiConnections = connections
+
+    local coreGui = game:GetService("CoreGui")
+    pcall(function()
+        local old = coreGui:FindFirstChild("MethionSH_ServerStats")
+        if old then old:Destroy() end
+    end)
+    local parent = coreGui
+    local screen = Instance.new("ScreenGui")
+    screen.Name = "MethionSH_ServerStats"
+    screen.ResetOnSpawn = false
+    screen.IgnoreGuiInset = true
+    screen.DisplayOrder = 10020
+    local parentOk = pcall(function() screen.Parent = parent end)
+    if not parentOk or not screen.Parent then
+        local playerGui = LP:FindFirstChildOfClass("PlayerGui") or LP:WaitForChild("PlayerGui")
+        screen.Parent = playerGui
+    end
+
+    local panel = Instance.new("Frame")
+    panel.Name = "Panel"
+    panel.Size = UDim2.fromOffset(244, 236)
+    panel.Position = UDim2.new(0, 10, 0.36, 0)
+    panel.BackgroundColor3 = Color3.fromRGB(18, 21, 28)
+    panel.BackgroundTransparency = 0.06
+    panel.BorderSizePixel = 0
+    panel.Parent = screen
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 9)
+    corner.Parent = panel
+    local outline = Instance.new("UIStroke")
+    outline.Color = Color3.fromRGB(58, 66, 82)
+    outline.Transparency = 0.18
+    outline.Thickness = 1
+    outline.Parent = panel
+    local scale = Instance.new("UIScale")
+    scale.Parent = panel
+
+    local header = Instance.new("Frame")
+    header.Name = "DragHeader"
+    header.BackgroundTransparency = 1
+    header.Position = UDim2.fromOffset(0, 0)
+    header.Size = UDim2.new(1, 0, 0, 48)
+    header.Active = true
+    header.Parent = panel
+
+    local title = Instance.new("TextLabel")
+    title.Name = "Title"
+    title.BackgroundTransparency = 1
+    title.Position = UDim2.fromOffset(13, 8)
+    title.Size = UDim2.new(1, -90, 0, 21)
+    title.Font = Enum.Font.GothamBold
+    title.Text = "SERVER HOPPER"
+    title.TextColor3 = Color3.fromRGB(237, 241, 248)
+    title.TextSize = 13
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.Active = false
+    title.Parent = header
+
+    local subtitle = Instance.new("TextLabel")
+    subtitle.BackgroundTransparency = 1
+    subtitle.Position = UDim2.fromOffset(13, 28)
+    subtitle.Size = UDim2.new(1, -26, 0, 13)
+    subtitle.Font = Enum.Font.Gotham
+    subtitle.Text = "SESSION TOTALS"
+    subtitle.TextColor3 = Color3.fromRGB(139, 149, 166)
+    subtitle.TextSize = 9
+    subtitle.TextXAlignment = Enum.TextXAlignment.Left
+    subtitle.Active = false
+    subtitle.Parent = header
+
+    local statusBadge = Instance.new("TextLabel")
+    statusBadge.Name = "Status"
+    statusBadge.AnchorPoint = Vector2.new(1, 0)
+    statusBadge.Position = UDim2.new(1, -11, 0, 11)
+    statusBadge.Size = UDim2.fromOffset(69, 20)
+    statusBadge.BackgroundColor3 = Color3.fromRGB(37, 64, 58)
+    statusBadge.BorderSizePixel = 0
+    statusBadge.Font = Enum.Font.GothamBold
+    statusBadge.Text = "STARTING"
+    statusBadge.TextColor3 = Color3.fromRGB(148, 230, 194)
+    statusBadge.TextSize = 9
+    statusBadge.Active = false
+    statusBadge.Parent = header
+    local statusCorner = Instance.new("UICorner")
+    statusCorner.CornerRadius = UDim.new(0, 5)
+    statusCorner.Parent = statusBadge
+
+    local accent = Instance.new("Frame")
+    accent.Name = "Accent"
+    accent.Position = UDim2.fromOffset(12, 48)
+    accent.Size = UDim2.new(1, -24, 0, 2)
+    accent.BackgroundColor3 = Color3.fromRGB(95, 173, 154)
+    accent.BorderSizePixel = 0
+    accent.Parent = panel
+
+    local rowsFrame = Instance.new("Frame")
+    rowsFrame.Name = "Rows"
+    rowsFrame.BackgroundTransparency = 1
+    rowsFrame.Position = UDim2.fromOffset(12, 57)
+    rowsFrame.Size = UDim2.new(1, -24, 0, 150)
+    rowsFrame.Parent = panel
+    local rowLayout = Instance.new("UIListLayout")
+    rowLayout.Padding = UDim.new(0, 2)
+    rowLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    rowLayout.Parent = rowsFrame
+
+    local rows = {}
+    local rowSpecs = {
+        {"SERVERS HOPPED", "ServersHopped"},
+        {"ITEMS THIS SERVER", "CurrentServerItems"},
+        {"ITEMS COLLECTED", "ItemsCollected"},
+        {"EARNED THIS SERVER", "CurrentServerMoneyEarned", true},
+        {"TOTAL MONEY EARNED", "LifetimeMoneyEarned", true},
+        {"SESSION TIME", "SessionTime"},
+    }
+    for index, spec in ipairs(rowSpecs) do
+        local row = Instance.new("Frame")
+        row.Name = "StatRow" .. tostring(index)
+        row.Size = UDim2.new(1, 0, 0, 21)
+        row.BackgroundTransparency = 1
+        row.LayoutOrder = index
+        row.Parent = rowsFrame
+
+        local label = Instance.new("TextLabel")
+        label.BackgroundTransparency = 1
+        label.Size = UDim2.new(0.61, 0, 1, 0)
+        label.Font = Enum.Font.GothamMedium
+        label.Text = spec[1]
+        label.TextColor3 = Color3.fromRGB(151, 161, 177)
+        label.TextSize = 9
+        label.TextXAlignment = Enum.TextXAlignment.Left
+        label.Parent = row
+
+        local value = Instance.new("TextLabel")
+        value.Name = "Value"
+        value.BackgroundTransparency = 1
+        value.Position = UDim2.new(0.61, 0, 0, 0)
+        value.Size = UDim2.new(0.39, 0, 1, 0)
+        value.Font = Enum.Font.GothamSemibold
+        value.Text = "0"
+        value.TextColor3 = Color3.fromRGB(237, 241, 248)
+        value.TextSize = 11
+        value.TextXAlignment = Enum.TextXAlignment.Right
+        value.TextTruncate = Enum.TextTruncate.AtEnd
+        value.Parent = row
+        rows[spec[2]] = {Label = value, Money = spec[3] == true}
+    end
+
+    local serverLabel = Instance.new("TextLabel")
+    serverLabel.Name = "ServerId"
+    serverLabel.BackgroundTransparency = 1
+    serverLabel.Position = UDim2.new(0, 12, 1, -20)
+    serverLabel.Size = UDim2.new(1, -24, 0, 12)
+    serverLabel.Font = Enum.Font.Code
+    serverLabel.Text = "SERVER 00000000"
+    serverLabel.TextColor3 = Color3.fromRGB(111, 123, 142)
+    serverLabel.TextSize = 9
+    serverLabel.TextXAlignment = Enum.TextXAlignment.Left
+    serverLabel.Parent = panel
+
+    local function updateResponsive()
+        local camera = workspace.CurrentCamera
+        local viewport = camera and camera.ViewportSize or Vector2.new(1280, 720)
+        if viewport.X < 430 then
+            scale.Scale = 0.82
+            panel.Position = UDim2.new(0, 7, 0.32, 0)
+        elseif viewport.X < 700 then
+            scale.Scale = 0.9
+            panel.Position = UDim2.new(0, 8, 0.34, 0)
+        else
+            scale.Scale = 1
+            panel.Position = UDim2.new(0, 10, 0.36, 0)
+        end
+    end
+    local function bindCamera(camera)
+        if camera then
+            table.insert(connections, camera:GetPropertyChangedSignal("ViewportSize"):Connect(updateResponsive))
+        end
+        updateResponsive()
+    end
+    bindCamera(workspace.CurrentCamera)
+    table.insert(connections, workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+        bindCamera(workspace.CurrentCamera)
+    end))
+
+    local dragging = false
+    local dragStart = nil
+    local startPosition = nil
+    table.insert(connections, header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPosition = panel.Position
+        end
+    end))
+    table.insert(connections, header.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end))
+    table.insert(connections, UserInputService.InputChanged:Connect(function(input)
+        if not dragging or not dragStart or not startPosition then return end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+        local delta = input.Position - dragStart
+        panel.Position = UDim2.new(startPosition.X.Scale, startPosition.X.Offset + delta.X, startPosition.Y.Scale, startPosition.Y.Offset + delta.Y)
+    end))
+
+    local function updateStats()
+        local values = {
+            ServersHopped = SHStats.ServersHopped,
+            CurrentServerItems = SHStats.CurrentServerItems,
+            ItemsCollected = SHStats.ItemsCollected,
+            CurrentServerMoneyEarned = SHStats.CurrentServerMoneyEarned,
+            LifetimeMoneyEarned = SHStats.LifetimeMoneyEarned,
+            SessionTime = shFormatDuration(os.time() - (tonumber(SHStats.StartedAt) or os.time())),
+        }
+        for key, row in pairs(rows) do
+            local value = values[key]
+            if row.Money then
+                row.Label.Text = "$" .. shFormatNumber(value)
+            elseif key == "SessionTime" then
+                row.Label.Text = tostring(value)
+            else
+                row.Label.Text = shFormatNumber(value)
+            end
+        end
+
+        local status = tostring(SHStats.Status or "Idle")
+        statusBadge.Text = string.upper(status)
+        if status == "Farming" then
+            statusBadge.BackgroundColor3 = Color3.fromRGB(37, 64, 58)
+            statusBadge.TextColor3 = Color3.fromRGB(148, 230, 194)
+        elseif status == "Hopping" then
+            statusBadge.BackgroundColor3 = Color3.fromRGB(45, 58, 83)
+            statusBadge.TextColor3 = Color3.fromRGB(167, 198, 255)
+        elseif status == "Retrying" then
+            statusBadge.BackgroundColor3 = Color3.fromRGB(83, 61, 39)
+            statusBadge.TextColor3 = Color3.fromRGB(255, 207, 140)
+        else
+            statusBadge.BackgroundColor3 = Color3.fromRGB(50, 54, 64)
+            statusBadge.TextColor3 = Color3.fromRGB(185, 192, 205)
+        end
+        local job = tostring(game.JobId or "")
+        serverLabel.Text = "SERVER " .. (job ~= "" and string.sub(job, 1, 8) or "UNKNOWN")
+    end
+
+    updateStats()
+    task.spawn(function()
+        while screen.Parent do
+            pcall(updateStats)
+            task.wait(1)
+        end
+    end)
+end
+
+createServerStatsPanel()
 
 local Window = AirflowCompat:CreateWindow({
     Name = "MethionSH",
@@ -13196,7 +13650,7 @@ return function(Window, player, QuestTab, config)
 		farmEnsureNoclip(char)
 	end, 12, 30)
 
-	notify("", "Sh.", 4)
+	notify("", "Mob Farm ready.", 4)
 end
 ]==])()
     if type(_G.__PhantomQuestFarmFactory) ~= "function" then
