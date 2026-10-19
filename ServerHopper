@@ -13196,7 +13196,7 @@ return function(Window, player, QuestTab, config)
 		farmEnsureNoclip(char)
 	end, 12, 30)
 
-	notify("", "Mob Farm ready.", 4)
+	notify("", "Sh.", 4)
 end
 ]==])()
     if type(_G.__PhantomQuestFarmFactory) ~= "function" then
