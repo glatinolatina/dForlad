@@ -452,6 +452,14 @@ function AirflowCompat:CreateWindow(config)
         })
     end
 
+    -- Expose Airflow's built-in confirmation component through the compatibility wrapper.
+    function window:Confirm(options)
+        options = options or {}
+        local confirmMethod = self.Raw and self.Raw.Confirm
+        assert(type(confirmMethod) == "function", "The Airflow library does not expose Window:Confirm")
+        return confirmMethod(self.Raw, options)
+    end
+
     function window:Destroy()
         if self.Raw and type(self.Raw.Destroy) == "function" then
             return self.Raw:Destroy()
@@ -10260,6 +10268,96 @@ Players.PlayerRemoving:Connect(function(plr)
         PlayerInfo.refreshList()
     end)
 end)
+
+-- Item Serverhop loader tab. Uses Airflow's built-in Window:Confirm dialog.
+local ITEM_SERVERHOP_URL = "https://raw.githubusercontent.com/Methions/Methion/refs/heads/main/Domain"
+local ItemServerhopTab = Window:Tab({
+    Title = "Item Serverhop",
+    Icon = "server",
+    Desc = "Load the Item Serverhop script.",
+})
+local ItemServerhopSection = ItemServerhopTab:Section({Title = "Script Switch", Side = "left"})
+ItemServerhopSection:Paragraph({
+    Title = "Load Item Serverhop",
+    Desc = "Confirming will close the Methion main UI and load Item Serverhop.",
+})
+
+local itemServerhopLoading = false
+local function loadItemServerhop()
+    if itemServerhopLoading then return end
+    itemServerhopLoading = true
+
+    local fetchOk, source = pcall(function()
+        return game:HttpGet(ITEM_SERVERHOP_URL)
+    end)
+    if not fetchOk or type(source) ~= "string" or source == "" then
+        itemServerhopLoading = false
+        Window:Notify({
+            Title = "Item Serverhop",
+            Content = "Could not download the script. Methion is still open.",
+            Type = "Error",
+            Duration = 5,
+        })
+        return
+    end
+
+    local loader, compileError = loadstring(source)
+    if type(loader) ~= "function" then
+        itemServerhopLoading = false
+        Window:Notify({
+            Title = "Item Serverhop",
+            Content = "Could not compile the script: " .. tostring(compileError),
+            Type = "Error",
+            Duration = 6,
+        })
+        return
+    end
+
+    -- Stop the visible automation features before removing the main window.
+    State.Farm = false
+    State.NoClip = false
+    State.ItemTracker = false
+    State.PlayerTracker = false
+    State.PlayerEsp = false
+    State.ItemEsp = false
+    State.HalloweenCandyFarm = false
+    pcall(function() ItemESP.setVisible(false) end)
+    pcall(function()
+        if TrackerESP.Gui and TrackerESP.Gui.Parent then TrackerESP.Gui:Destroy() end
+        TrackerESP.Gui = nil
+        table.clear(TrackerESP.Lines)
+    end)
+    pcall(function() Window:Destroy() end)
+
+    -- The source was downloaded and compiled before closing Methion.
+    local runOk, runError = pcall(loader)
+    if not runOk then
+        warn("[Item Serverhop] Failed to start: " .. tostring(runError))
+    end
+    itemServerhopLoading = false
+end
+
+ItemServerhopSection:Button({
+    Title = "Load Item Serverhop",
+    Desc = "open Item ServerHopper.",
+    Icon = "server",
+    Callback = function()
+        if itemServerhopLoading then return end
+        Window:Confirm({
+            Title = "Load Item Serverhop?",
+            Content = "Loading Item Serverhop will destroy the Methion main UI. Do you want to continue?",
+            Icon = "circle-help",
+            ConfirmText = "Yes, Load",
+            CancelText = "No, Keep Methion",
+            Callback = function()
+                loadItemServerhop()
+            end,
+            OnCancel = function()
+                -- The built-in confirmation closes itself; Methion stays open.
+            end,
+        })
+    end,
+})
 
 local SettingsTab = Window:Tab({Title = "Settings", Icon = "settings", Desc = "General settings."})
 _G.__MethionSettingsSections = _G.__MethionSettingsSections or {}
